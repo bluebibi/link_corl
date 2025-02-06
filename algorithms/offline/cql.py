@@ -232,10 +232,10 @@ def eval_actor(
     return np.asarray(episode_rewards)
 
 
-def return_reward_range(dataset: Dict, max_episode_steps: int) -> Tuple[float, float]:
+def return_reward_range(all_rewards, all_terminations, max_episode_steps: int) -> Tuple[float, float]:
     returns, lengths = [], []
     ep_ret, ep_len = 0.0, 0
-    for r, d in zip(dataset["rewards"], dataset["terminals"]):
+    for r, d in zip(all_rewards, all_terminations):
         ep_ret += float(r)
         ep_len += 1
         if d or ep_len == max_episode_steps:
@@ -243,23 +243,24 @@ def return_reward_range(dataset: Dict, max_episode_steps: int) -> Tuple[float, f
             lengths.append(ep_len)
             ep_ret, ep_len = 0.0, 0
     lengths.append(ep_len)  # but still keep track of number of steps
-    assert sum(lengths) == len(dataset["rewards"])
+    assert sum(lengths) == len(all_rewards)
     return min(returns), max(returns)
 
 
 def modify_reward(
-    dataset: Dict,
+    all_rewards,
+    all_terminations,
     env_name: str,
     max_episode_steps: int = 1000,
     reward_scale: float = 1.0,
     reward_bias: float = 0.0,
 ):
     if any(s in env_name for s in ("halfcheetah", "hopper", "walker2d")):
-        min_ret, max_ret = return_reward_range(dataset, max_episode_steps)
-        dataset["rewards"] /= max_ret - min_ret
-        dataset["rewards"] *= max_episode_steps
-    dataset["rewards"] = dataset["rewards"] * reward_scale + reward_bias
-
+        min_ret, max_ret = return_reward_range(all_rewards, all_terminations, max_episode_steps)
+        all_rewards /= max_ret - min_ret
+        all_rewards *= max_episode_steps
+    all_rewards = all_rewards * reward_scale + reward_bias
+    return all_rewards
 
 def extend_and_repeat(tensor: torch.Tensor, dim: int, repeat: int) -> torch.Tensor:
     return tensor.unsqueeze(dim).repeat_interleave(repeat, dim=dim)
@@ -899,12 +900,13 @@ def train(config: TrainConfig):
     # print("all_infos.shape:", all_infos.shape)
 
     if config.normalize_reward:
-        modify_reward(
-            dataset,
+        all_rewards = modify_reward(
+            all_rewards.reshape(-1),
+            all_terminations.reshape(-1),
             config.env,
             reward_scale=config.reward_scale,
             reward_bias=config.reward_bias,
-        )
+        ).reshape(n_episodes, -1)
 
     if config.normalize:
         state_mean, state_std = compute_mean_std(all_observations.reshape(-1, state_dim), eps=1e-3)
