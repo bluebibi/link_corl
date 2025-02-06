@@ -39,7 +39,7 @@ class TrainConfig:
     batch_size: int = 256  # Batch size for all networks
     discount: float = 0.99  # Discount factor
     alpha_multiplier: float = 1.0  # Multiplier for alpha in loss
-    use_automatic_entropy_tuning: bool = True  # Tune entropy
+    use_automatic_entropy_tuning: bool = False  # Tune entropy
     backup_entropy: bool = False  # Use backup entropy
     policy_lr: float = 3e-5  # Policy learning rate
     qf_lr: float = 3e-4  # Critics learning rate
@@ -460,7 +460,7 @@ class ContinuousCQL:
         alpha_multiplier: float = 1.0,
         use_automatic_entropy_tuning: bool = True,
         backup_entropy: bool = False,
-        policy_lr: bool = 3e-4,
+        policy_lr: bool = 3e-5,
         qf_lr: bool = 3e-4,
         soft_target_update_rate: float = 5e-3,
         bc_steps=100000,
@@ -516,8 +516,7 @@ class ContinuousCQL:
         if self.use_automatic_entropy_tuning:
             self.log_alpha = Scalar(0.0)
             self.alpha_optimizer = torch.optim.Adam(
-                self.log_alpha.parameters(),
-                lr=self.policy_lr,
+                self.log_alpha.parameters(), lr=self.policy_lr,
             )
         else:
             self.log_alpha = None
@@ -541,8 +540,10 @@ class ContinuousCQL:
             ).mean()
             alpha = self.log_alpha().exp() * self.alpha_multiplier
         else:
+            # new_tensor: 호출되는 텐서와 동일한 device(CPU 또는 GPU) 및 dtype(데이터 타입)을
+            # 유지하면서 새로운 텐서를 생성
             alpha_loss = observations.new_tensor(0.0)
-            alpha = observations.new_tensor(self.alpha_multiplier)
+            alpha = observations.new_tensor(self.alpha_multiplier) # 1.0
         return alpha, alpha_loss
 
     def _policy_loss(
@@ -1022,9 +1023,14 @@ def train(config: TrainConfig):
     for t in range(int(config.max_timesteps)):
         batch = replay_buffer.sample(config.batch_size)
         batch = [b.to(config.device) for b in batch]
+
+        ########### TRAIN #############
         log_dict = trainer.train(batch)
+        ###############################
+
         if config.wandb:
             wandb.log(log_dict, step=trainer.total_it)
+
         # Evaluate episode
         if (t + 1) % config.eval_freq == 0:
             print(f"Time steps: {t + 1}")
