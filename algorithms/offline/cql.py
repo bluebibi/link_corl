@@ -599,7 +599,7 @@ class ContinuousCQL:
                 self.target_critic_2(next_observations, new_next_actions),
             )
 
-        print(target_q_values.shape, "$$$$$$$$$$$$$")
+        # target_q_values.shape: [256]
 
         if self.backup_entropy:
             target_q_values = target_q_values - alpha * next_log_pi
