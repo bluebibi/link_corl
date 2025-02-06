@@ -40,7 +40,7 @@ class TrainConfig:
     discount: float = 0.99  # Discount factor
     alpha_multiplier: float = 1.0  # Multiplier for alpha in loss
     use_automatic_entropy_tuning: bool = True  # Tune entropy
-    backup_entropy: bool = False  # Use backup entropy
+    backup_entropy: bool = True  # Use backup entropy
     policy_lr: float = 3e-5  # Policy learning rate
     qf_lr: float = 3e-4  # Critics learning rate
     soft_target_update_rate: float = 5e-3  # Target network update rate
@@ -51,7 +51,7 @@ class TrainConfig:
     cql_target_action_gap: float = -1.0  # Action gap
     cql_temp: float = 1.0  # CQL temperature
     cql_alpha: float = 10.0  # Minimal Q weight
-    cql_max_target_backup: bool = False  # Use max target backup
+    cql_max_target_backup: bool = True  # Use max target backup
     cql_clip_diff_min: float = -np.inf  # Q-function lower loss clipping
     cql_clip_diff_max: float = np.inf  # Q-function upper loss clipping
     orthogonal_init: bool = True  # Orthogonal initialization
@@ -599,6 +599,8 @@ class ContinuousCQL:
                 self.target_critic_2(next_observations, new_next_actions),
             )
 
+        print(target_q_values.shape, "$$$$$$$$$$$$$")
+
         if self.backup_entropy:
             target_q_values = target_q_values - alpha * next_log_pi
 
@@ -659,6 +661,7 @@ class ContinuousCQL:
 
         if self.cql_importance_sample:
             random_density = np.log(0.5**action_dim)
+
             cql_cat_q1 = torch.cat(
                 [
                     cql_q1_rand - random_density,
