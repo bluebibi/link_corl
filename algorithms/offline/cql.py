@@ -29,8 +29,8 @@ class TrainConfig:
     env: str = "halfcheetah-medium-expert-v2"  # OpenAI gym environment name
     minari_dataset_name: str = "mujoco/halfcheetah/expert-v0"
     seed: int = 0  # Sets Gym, PyTorch and Numpy seeds
-    # eval_freq: int = int(5e3)  # How often (time steps) we evaluate
-    eval_freq: int = 1_000  # How often (time steps) we evaluate
+    eval_freq: int = int(5e3)  # How often (time steps) we evaluate
+    # eval_freq: int = 2_000  # How often (time steps) we evaluate
     n_episodes: int = 10  # How many episodes run during evaluation
     max_timesteps: int = int(1e6)  # Max time steps to run environment
     checkpoints_path: Optional[str] = None  # Save path
