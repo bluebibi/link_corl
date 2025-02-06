@@ -39,7 +39,7 @@ class TrainConfig:
     batch_size: int = 256  # Batch size for all networks
     discount: float = 0.99  # Discount factor
     alpha_multiplier: float = 1.0  # Multiplier for alpha in loss
-    use_automatic_entropy_tuning: bool = False  # Tune entropy
+    use_automatic_entropy_tuning: bool = True  # Tune entropy
     backup_entropy: bool = False  # Use backup entropy
     policy_lr: float = 3e-5  # Policy learning rate
     qf_lr: float = 3e-4  # Critics learning rate
@@ -590,7 +590,7 @@ class ContinuousCQL:
                 dim=-1,
             )
             next_log_pi = torch.gather(
-                next_log_pi, -1, max_target_indices.unsqueeze(-1)
+                next_log_pi, dim=-1, index=max_target_indices.unsqueeze(-1)
             ).squeeze(-1)
         else:
             new_next_actions, next_log_pi = self.actor(next_observations)
