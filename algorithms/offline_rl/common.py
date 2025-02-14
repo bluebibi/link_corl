@@ -182,7 +182,7 @@ class ReplayBuffer:
         actions = self._actions[indices]
         rewards = self._rewards[indices]
         next_states = self._next_states[indices]
-        dones = self._terminations[indices]
+        dones = torch.where((self._terminations[indices] + self._truncations[indices]) > 0.0, 1.0, 0.0)
         return [states, actions, rewards, next_states, dones]
 
     def sample_with_next_actions(self, batch_size: int) -> TensorBatch:
@@ -192,7 +192,7 @@ class ReplayBuffer:
         rewards = self._rewards[indices]
         next_states = self._next_states[indices]
         next_actions = self._next_actions[indices]
-        dones = self._terminations[indices]
+        dones = torch.where((self._terminations[indices] + self._truncations[indices]) > 0.0, 1.0, 0.0)
         return [states, actions, rewards, next_states, next_actions, dones]
 
     def add_transition(self):
@@ -277,6 +277,11 @@ def preliminary(config):
     # print("all_truncations.shape:", all_truncations.shape)
     # print("all_infos.shape:", all_infos.shape)
 
+    # Print Episode Rewards
+    episode_rewards = all_rewards.sum(axis=1)
+    average_episode_rewards = episode_rewards.mean().item()
+    print(f"Average Episode Reward over {n_episodes} episodes: {average_episode_rewards:.2f}")
+
     if config.normalize_reward:
         all_rewards = modify_reward(
             all_rewards.reshape(-1),
@@ -312,8 +317,6 @@ def preliminary(config):
         config.buffer_size,
         config.device,
     )
-
-    print(config.name, "%%%%%%%%%%%%")
 
     if config.name.startswith("ReBRAC"):
         replay_buffer.load_dataset_with_next_actions(
