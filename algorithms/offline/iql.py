@@ -38,7 +38,7 @@ class TrainConfig:
     # training dataset and evaluation environment
     env: str = "halfcheetah-medium-expert-v2"
     # discount factor
-    discount: float = 0.99
+    gamma: float = 0.99
     # coefficient for the target critic Polyak's update
     tau: float = 0.005
     # actor update inverse temperature, similar to AWAC
@@ -407,7 +407,7 @@ class ImplicitQLearning:
         iql_tau: float = 0.7,
         beta: float = 3.0,
         max_steps: int = 1000000,
-        discount: float = 0.99,
+        gamma: float = 0.99,
         tau: float = 0.005,
         device: str = "cpu",
     ):
@@ -422,7 +422,7 @@ class ImplicitQLearning:
         self.actor_lr_schedule = CosineAnnealingLR(self.actor_optimizer, max_steps)
         self.iql_tau = iql_tau
         self.beta = beta
-        self.discount = discount
+        self.gamma = gamma
         self.tau = tau
 
         self.total_it = 0
@@ -451,7 +451,7 @@ class ImplicitQLearning:
         terminals: torch.Tensor,
         log_dict: Dict,
     ):
-        targets = rewards + (1.0 - terminals.float()) * self.discount * next_v.detach()
+        targets = rewards + (1.0 - terminals.float()) * self.gamma * next_v.detach()
         qs = self.qf.both(observations, actions)
         q_loss = sum(F.mse_loss(q, targets) for q in qs) / len(qs)
         log_dict["q_loss"] = q_loss.item()
@@ -604,7 +604,7 @@ def train(config: TrainConfig):
         "q_optimizer": q_optimizer,
         "v_network": v_network,
         "v_optimizer": v_optimizer,
-        "discount": config.discount,
+        "gamma": config.gamma,
         "tau": config.tau,
         "device": config.device,
         # IQL

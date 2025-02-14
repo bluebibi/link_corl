@@ -32,7 +32,7 @@ class TrainConfig:
     hidden_dim: int = 256
     # actor and critic learning rate
     learning_rate: float = 3e-4
-    # discount factor
+    # gamma factor
     gamma: float = 0.99
     # coefficient for the target critic Polyak's update
     tau: float = 5e-3

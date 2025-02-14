@@ -40,7 +40,7 @@ class TrainConfig:
     # whether to normalize states
     normalize: bool = True
     # discount factor
-    discount: float = 0.99
+    gamma: float = 0.99
     # evaluation frequency, will evaluate eval_freq training steps
     eval_freq: int = int(5e3)
     # number of episodes to run during evaluation
@@ -206,7 +206,7 @@ def eval_actor(
 def keep_best_trajectories(
     dataset: Dict[str, np.ndarray],
     frac: float,
-    discount: float,
+    gamma: float,
     max_episode_steps: int = 1000,
 ):
     ids_by_trajectories = []
@@ -217,7 +217,7 @@ def keep_best_trajectories(
     for i, (reward, done) in enumerate(zip(dataset["rewards"], dataset["terminals"])):
         cur_return += reward_scale * reward
         cur_ids.append(i)
-        reward_scale *= discount
+        reward_scale *= gamma
         if done == 1.0 or len(cur_ids) == max_episode_steps:
             ids_by_trajectories.append(list(cur_ids))
             returns.append(cur_return)
@@ -269,13 +269,13 @@ class BC:
         max_action: np.ndarray,
         actor: nn.Module,
         actor_optimizer: torch.optim.Optimizer,
-        discount: float = 0.99,
+        gamma: float = 0.99,
         device: str = "cpu",
     ):
         self.actor = actor
         self.actor_optimizer = actor_optimizer
         self.max_action = max_action
-        self.discount = discount
+        self.gamma = gamma
 
         self.total_it = 0
         self.device = device
@@ -319,7 +319,7 @@ def train(config: TrainConfig):
 
     dataset = d4rl.qlearning_dataset(env)
 
-    keep_best_trajectories(dataset, config.frac, config.discount)
+    keep_best_trajectories(dataset, config.frac, config.gamma)
 
     if config.normalize:
         state_mean, state_std = compute_mean_std(dataset["observations"], eps=1e-3)
@@ -360,7 +360,7 @@ def train(config: TrainConfig):
         "max_action": max_action,
         "actor": actor,
         "actor_optimizer": actor_optimizer,
-        "discount": config.discount,
+        "gamma": config.gamma,
         "device": config.device,
     }
 

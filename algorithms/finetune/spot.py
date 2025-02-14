@@ -40,7 +40,7 @@ class TrainConfig:
     critic_lr: float = 3e-4  # Actor learning rate
     buffer_size: int = 20_000_000  # Replay buffer size
     batch_size: int = 256  # Batch size for all networks
-    discount: float = 0.99  # Discount factor
+    gamma: float = 0.99  # Discount factor
     expl_noise: float = 0.1  # Std of Gaussian exploration noise
     tau: float = 0.005  # Target network update rate
     policy_noise: float = 0.2  # Noise added to target actor during critic update
@@ -468,7 +468,7 @@ class SPOT:
         critic_2_optimizer: torch.optim.Optimizer,
         vae: nn.Module,
         vae_optimizer: torch.optim.Optimizer,
-        discount: float = 0.99,
+        gamma: float = 0.99,
         tau: float = 0.005,
         policy_noise: float = 0.2,
         noise_clip: float = 0.5,
@@ -496,7 +496,7 @@ class SPOT:
         self.vae_optimizer = vae_optimizer
 
         self.max_action = max_action
-        self.discount = discount
+        self.gamma = gamma
         self.tau = tau
         self.policy_noise = policy_noise
         self.noise_clip = noise_clip
@@ -597,7 +597,7 @@ class SPOT:
             target_q1 = self.critic_1_target(next_state, next_action)
             target_q2 = self.critic_2_target(next_state, next_action)
             target_q = torch.min(target_q1, target_q2)
-            target_q = reward + not_done * self.discount * target_q
+            target_q = reward + not_done * self.gamma * target_q
 
         # Get current Q estimates
         current_q1 = self.critic_1(state, action)
@@ -761,7 +761,7 @@ def train(config: TrainConfig):
         "critic_1_optimizer": critic_1_optimizer,
         "critic_2": critic_2,
         "critic_2_optimizer": critic_2_optimizer,
-        "discount": config.discount,
+        "gamma": config.gamma,
         "tau": config.tau,
         "device": config.device,
         # TD3
@@ -815,7 +815,7 @@ def train(config: TrainConfig):
         if t == config.offline_iterations:
             print("Online tuning")
             trainer.is_online = True
-            trainer.discount = config.online_discount
+            trainer.gamma = config.online_discount
             # Resetting optimizers
             trainer.actor_optimizer = torch.optim.Adam(
                 actor.parameters(), lr=config.actor_lr

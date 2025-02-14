@@ -38,7 +38,7 @@ class TrainConfig:
     load_model: str = ""  # Model load file name, "" doesn't load
     buffer_size: int = 2_000_000  # Replay buffer size
     batch_size: int = 256  # Batch size for all networks
-    discount: float = 0.99  # Discount factor
+    gamma: float = 0.99  # Discount factor
     alpha_multiplier: float = 1.0  # Multiplier for alpha in loss
     use_automatic_entropy_tuning: bool = True  # Tune entropy
     backup_entropy: bool = False  # Use backup entropy
@@ -487,7 +487,7 @@ class ContinuousCQL:
         actor,
         actor_optimizer,
         target_entropy: float,
-        discount: float = 0.99,
+        gamma: float = 0.99,
         alpha_multiplier: float = 1.0,
         use_automatic_entropy_tuning: bool = True,
         backup_entropy: bool = False,
@@ -509,7 +509,7 @@ class ContinuousCQL:
     ):
         super().__init__()
 
-        self.discount = discount
+        self.gamma = gamma
         self.target_entropy = target_entropy
         self.alpha_multiplier = alpha_multiplier
         self.use_automatic_entropy_tuning = use_automatic_entropy_tuning
@@ -633,7 +633,7 @@ class ContinuousCQL:
             target_q_values = target_q_values - alpha * next_log_pi
 
         target_q_values = target_q_values.unsqueeze(-1)
-        td_target = rewards + (1.0 - dones) * self.discount * target_q_values.detach()
+        td_target = rewards + (1.0 - dones) * self.gamma * target_q_values.detach()
         td_target = td_target.squeeze(-1)
         qf1_loss = F.mse_loss(q1_predicted, td_target.detach())
         qf2_loss = F.mse_loss(q2_predicted, td_target.detach())
@@ -960,7 +960,7 @@ def train(config: TrainConfig):
         "critic_2_optimizer": critic_2_optimizer,
         "actor": actor,
         "actor_optimizer": actor_optimizer,
-        "discount": config.discount,
+        "gamma": config.gamma,
         "soft_target_update_rate": config.soft_target_update_rate,
         "device": config.device,
         # CQL

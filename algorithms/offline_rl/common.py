@@ -96,6 +96,9 @@ class ReplayBuffer:
         self._next_states = torch.zeros(
             (buffer_size, state_dim), dtype=torch.float32, device=device
         )
+        self._next_actions = torch.zeros(
+            (buffer_size, action_dim), dtype=torch.float32, device=device
+        )
         self._terminations = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
         self._truncations = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
         self._device = device
@@ -127,10 +130,51 @@ class ReplayBuffer:
         self._next_states[:n_transitions] = self._to_tensor(next_observations)
         self._terminations[:n_transitions] = self._to_tensor(terminations[..., None])
         self._truncations[:n_transitions] = self._to_tensor(truncations[..., None])
+
         self._size += n_transitions
         self._pointer = min(self._size, n_transitions)
 
         print(f"Dataset size: {n_transitions}")
+
+    def load_dataset_with_next_actions(
+            self,
+            n_episodes: int,
+            observations: np.ndarray,
+            next_observations: np.ndarray,
+            actions: np.ndarray,
+            rewards: np.ndarray,
+            terminations: np.ndarray,
+            truncations: np.ndarray,
+            infos: np.ndarray
+    ):
+        self.load_dataset(observations, next_observations, actions, rewards, terminations, truncations, infos)
+
+        n_transitions = observations.shape[0]
+        if n_transitions > self._buffer_size:
+            raise ValueError(
+                "Replay buffer is smaller than the dataset you are trying to load!"
+            )
+
+        # next_actions
+        assert n_transitions % n_episodes == 0
+        # actions_unflatten.shape: (1000, 1000, 6)
+        actions_unflatten = self._to_tensor(
+            actions.reshape(n_episodes, n_transitions // n_episodes, actions.shape[-1])
+        )
+
+        # Step 1: 첫 번째(0번째) 항목 삭제 -> Shape (1000, 999, 6)
+        next_actions = actions_unflatten[:, 1:, :]
+
+        # Step 2: 마지막 행에 None을 대체할 NaN으로 채운 텐서 생성 -> Shape (1000, 1, 6)
+        nan_padding = torch.full((n_episodes, 1, 6), 0.0)  # NaN으로 채우기
+
+        # Step 3: 두 텐서를 concat하여 최종 결과 만들기 -> Shape (1000, 1000, 6)
+        next_actions = torch.cat((next_actions, nan_padding), dim=1)
+
+        # next_actions_flatten.shape: (1000000, 6)
+        next_actions_flatten = next_actions.reshape(-1, actions.shape[-1])
+
+        self._next_actions[:n_transitions] = next_actions_flatten
 
     def sample(self, batch_size: int) -> TensorBatch:
         indices = np.random.randint(0, min(self._size, self._pointer), size=batch_size)
@@ -140,6 +184,16 @@ class ReplayBuffer:
         next_states = self._next_states[indices]
         dones = self._terminations[indices]
         return [states, actions, rewards, next_states, dones]
+
+    def sample_with_next_actions(self, batch_size: int) -> TensorBatch:
+        indices = np.random.randint(0, min(self._size, self._pointer), size=batch_size)
+        states = self._states[indices]
+        actions = self._actions[indices]
+        rewards = self._rewards[indices]
+        next_states = self._next_states[indices]
+        next_actions = self._next_actions[indices]
+        dones = self._terminations[indices]
+        return [states, actions, rewards, next_states, next_actions, dones]
 
     def add_transition(self):
         # Use this method to add new data into the replay buffer during fine-tuning.
@@ -258,15 +312,30 @@ def preliminary(config):
         config.buffer_size,
         config.device,
     )
-    replay_buffer.load_dataset(
-        observations.reshape(-1, state_dim),
-        next_observations.reshape(-1, state_dim),
-        all_actions.reshape(-1, action_dim),
-        all_rewards.reshape(-1),
-        all_terminations.reshape(-1),
-        all_truncations.reshape(-1),
-        all_infos.reshape(-1)
-    )
+
+    print(config.name, "%%%%%%%%%%%%")
+
+    if config.name.startswith("ReBRAC"):
+        replay_buffer.load_dataset_with_next_actions(
+            n_episodes,
+            observations.reshape(-1, state_dim),
+            next_observations.reshape(-1, state_dim),
+            all_actions.reshape(-1, action_dim),
+            all_rewards.reshape(-1),
+            all_terminations.reshape(-1),
+            all_truncations.reshape(-1),
+            all_infos.reshape(-1)
+        )
+    else:
+        replay_buffer.load_dataset(
+            observations.reshape(-1, state_dim),
+            next_observations.reshape(-1, state_dim),
+            all_actions.reshape(-1, action_dim),
+            all_rewards.reshape(-1),
+            all_terminations.reshape(-1),
+            all_truncations.reshape(-1),
+            all_infos.reshape(-1)
+        )
 
     # max_action = float(env.action_space.high[0])
 
@@ -300,6 +369,9 @@ def eval_actor(
     actor.train()
     return np.asarray(episode_rewards)
 
+def get_gamma(t, config):
+    return config.gamma_start + (config.gamma_end - config.gamma_start) * (t / config.max_timesteps)
+
 def train_and_eval_loop(trainer, config, replay_buffer, eval_env, actor):
     if config.load_model != "":
         policy_file = Path(config.load_model)
@@ -311,8 +383,16 @@ def train_and_eval_loop(trainer, config, replay_buffer, eval_env, actor):
 
     evaluations = []
     for t in range(int(config.max_timesteps)):
-        batch = replay_buffer.sample(config.batch_size)
+        if config.name.startswith("ReBRAC"):
+            batch = replay_buffer.sample_with_next_actions(config.batch_size)
+        else:
+            batch = replay_buffer.sample(config.batch_size)
+
         batch = [b.to(config.device) for b in batch]
+
+        if config.name.startswith("ReBRAC"):
+            config.gamma = get_gamma(t, config)
+
         ########### TRAIN #############
         log_dict = trainer.train(batch)
         ###############################

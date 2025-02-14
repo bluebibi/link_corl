@@ -239,7 +239,7 @@ def calc_return_to_go(is_sparse_reward, rewards, terminals, gamma):
 def qlearning_dataset(
         env, dataset_name,
         normalize_reward=False, dataset=None,
-        terminate_on_end=False, discount=0.99, **kwargs
+        terminate_on_end=False, gamma=0.99, **kwargs
 ):
     """
     Returns datasets formatted for use by standard Q-learning algorithms,
@@ -305,7 +305,7 @@ def qlearning_dataset(
             # Skip this transition and don't apply terminals on the last step of episode
             episode_step = 0
             mc_returns_ += calc_return_to_go(
-                is_sparse, episode_rewards, episode_terminals, discount
+                is_sparse, episode_rewards, episode_terminals, gamma
             )
             continue
         if done_bool or final_timestep:
@@ -323,7 +323,7 @@ def qlearning_dataset(
         episode_step += 1
     if episode_step != 0:
         mc_returns_ += calc_return_to_go(
-            is_sparse, episode_rewards, episode_terminals, discount
+            is_sparse, episode_rewards, episode_terminals, gamma
         )
     assert np.array(mc_returns_).shape == np.array(reward_).shape
     return {
@@ -527,10 +527,10 @@ class D4RLDataset(Dataset):
              env: gym.Env,
              env_name: str,
              normalize_reward: bool,
-             discount: float,
+             gamma: float,
     ):
         d4rl_data = qlearning_dataset(
-            env, env_name, normalize_reward=normalize_reward, discount=discount
+            env, env_name, normalize_reward=normalize_reward, gamma=gamma
         )
         dataset = {
             "states": jnp.asarray(d4rl_data["observations"], dtype=jnp.float32),
@@ -624,14 +624,14 @@ def wrap_env(
 def make_env_and_dataset(env_name: str,
                          seed: int,
                          normalize_reward: bool,
-                         discount: float) -> Tuple[gym.Env, D4RLDataset]:
+                         gamma: float) -> Tuple[gym.Env, D4RLDataset]:
     env = gym.make(env_name)
 
     env.seed(seed)
     env.action_space.seed(seed)
     env.observation_space.seed(seed)
 
-    dataset = D4RLDataset(env, env_name, normalize_reward, discount=discount)
+    dataset = D4RLDataset(env, env_name, normalize_reward, gamma=gamma)
 
     return env, dataset
 
@@ -905,10 +905,10 @@ def train(config: Config):
 
     # Online + offline tuning
     env, dataset = make_env_and_dataset(
-        config.dataset_name, config.train_seed, False, discount=config.gamma
+        config.dataset_name, config.train_seed, False, gamma=config.gamma
     )
     eval_env, _ = make_env_and_dataset(
-        config.dataset_name, config.eval_seed, False, discount=config.gamma
+        config.dataset_name, config.eval_seed, False, gamma=config.gamma
     )
 
     max_steps = env._max_episode_steps
