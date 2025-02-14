@@ -193,7 +193,11 @@ class ReplayBuffer:
         next_states = self._next_states[indices]
         next_actions = self._next_actions[indices]
         dones = torch.where((self._terminations[indices] + self._truncations[indices]) > 0.0, 1.0, 0.0)
+        print(self._terminations[indices].sum(), self._truncations[indices].sum(), dones.shape, dones.sum(), "@#############")
         return [states, actions, rewards, next_states, next_actions, dones]
+
+    def get_all_states_and_actions(self):
+        return self._states[:self._size], self._actions[:self._size]
 
     def add_transition(self):
         # Use this method to add new data into the replay buffer during fine-tuning.
@@ -266,6 +270,7 @@ def preliminary(config):
 
     # (1000, 1000)
     all_truncations = np.asarray([episode.truncations for episode in all_episode_list])
+    # print(all_truncations.sum(axis=-1).sum(), "@@@@@")
 
     # (1000,): [{} {} ... {} {}]
     all_infos = np.asarray([episode.infos for episode in all_episode_list])
@@ -285,7 +290,7 @@ def preliminary(config):
     if config.normalize_reward:
         all_rewards = modify_reward(
             all_rewards.reshape(-1),
-            all_terminations.reshape(-1),
+            np.where((all_terminations + all_truncations) > 0.0, 1.0, 0.0).reshape(-1),
             config.env,
             reward_scale=config.reward_scale,
             reward_bias=config.reward_bias,
@@ -353,24 +358,30 @@ def preliminary(config):
 @torch.no_grad()
 def eval_actor(
     env: gym.Env, actor: nn.Module, device: str, n_episodes: int, seed: int
-) -> np.ndarray:
+):
     actor.eval()
     episode_rewards = []
+    episode_timesteps = []
+
     for _ in range(n_episodes):
         state, done = env.reset(), False
         state = state[0]
 
         episode_reward = 0.0
+        timestep = 0
 
         while not done:
             action = actor.act(state, device)
             state, reward, terminated, truncated, _ = env.step(action)
             episode_reward += reward
+            timestep += 1
             done = terminated or truncated
         episode_rewards.append(episode_reward)
+        episode_timesteps.append(timestep)
 
     actor.train()
-    return np.asarray(episode_rewards)
+
+    return np.asarray(episode_rewards), np.asarray(episode_timesteps)
 
 def get_gamma(t, config):
     return config.gamma_start + (config.gamma_end - config.gamma_start) * (t / config.max_timesteps)
@@ -406,7 +417,7 @@ def train_and_eval_loop(trainer, config, replay_buffer, eval_env, actor):
         # Evaluate episode
         if (t + 1) % config.eval_freq == 0:
             print(f"Time steps: {t + 1}")
-            eval_scores = eval_actor(
+            eval_scores, eval_timesteps = eval_actor(
                 eval_env,
                 actor,
                 device=config.device,
@@ -414,11 +425,16 @@ def train_and_eval_loop(trainer, config, replay_buffer, eval_env, actor):
                 seed=config.seed,
             )
             eval_score = eval_scores.mean()
+            eval_timestep = eval_timesteps.mean()
+
             # normalized_eval_score = eval_env.get_normalized_score(eval_score) * 100.0
             evaluations.append(eval_score)
             print("---------------------------------------")
             print(
-                f"Evaluation score over {config.n_episodes} episodes: {eval_score:.3f}"
+                f"Evaluation episode reward over {config.n_episodes} episodes: {eval_score:.3f}"
+            )
+            print(
+                f"Evaluation timestep over {config.n_episodes} episodes: {eval_timestep:.2f}"
             )
             print("---------------------------------------")
             if config.checkpoints_path:
@@ -428,5 +444,8 @@ def train_and_eval_loop(trainer, config, replay_buffer, eval_env, actor):
                 )
             if config.wandb:
                 wandb.log(
-                    {"eval_score": eval_score}, step=trainer.total_it,
+                    {
+                        "eval_episode_reward": eval_score,
+                        "eval_timestep": eval_timestep
+                    }, step=trainer.total_it,
                 )

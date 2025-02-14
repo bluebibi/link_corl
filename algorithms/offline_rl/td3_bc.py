@@ -56,7 +56,7 @@ class TrainConfig:
     # whether to normalize states
     normalize: bool = True
     # whether to normalize reward (like in IQL)
-    normalize_reward: bool = True
+    normalize_reward: bool = False
     reward_scale: float = 5.0  # Reward scale for normalization
     reward_bias: float = -1.0  # Reward bias for normalization
     # path for checkpoints saving, optional

@@ -1,7 +1,5 @@
-# ReBRAC
-# 1. Deeper Networks
-# 2. LayerNorm
-# 3. Larger Batches
+# source: https://github.com/sfujim/TD3_BC
+# https://arxiv.org/pdf/2106.06860.pdf
 import copy
 import os
 import uuid
@@ -15,6 +13,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from algorithms.offline_rl.common import preliminary, TensorBatch, soft_update, train_and_eval_loop
 
+# pip install scipy
+from scipy.spatial import KDTree # PRDC
 
 @dataclass
 class TrainConfig:
@@ -30,16 +30,12 @@ class TrainConfig:
     # wandb project name
     project: str = "CORL"
     # wandb group name
-    group: str = "ReBRAC-MINARI"
+    group: str = "TD3_BC-MINARI"
     # wandb run name
-    name: str = "ReBRAC"
+    name: str = "TD3_BC"
     # training dataset and evaluation environment
-
-    # coefficient for penalty 1 in ReBRAC
-    beta1: float = 0.01
-    # coefficient for penalty 1 in ReBRAC
-    beta2: float = 0.01
-
+    # coefficient for the Q-function in actor loss
+    alpha: float = 2.5
     # discount factor
     gamma: float = 0.99
     # standard deviation for the gaussian exploration noise
@@ -58,7 +54,7 @@ class TrainConfig:
     # maximum size of the replay buffer
     buffer_size: int = 2_000_000
     # training batch size
-    batch_size: int = 1_024
+    batch_size: int = 256
     # whether to normalize states
     normalize: bool = True
     # whether to normalize reward (like in IQL)
@@ -70,10 +66,8 @@ class TrainConfig:
     # file name for loading a model, optional
     load_model: str = ""
 
-    #ReBRAC
-    gamma_start = 0.99
-    gamma_end = 0.999
-
+    # PRDC - [beta * state, action]
+    beta: int = 2
     wandb: bool = False
 
 
@@ -93,13 +87,12 @@ class Actor(nn.Module):
             nn.ReLU(),
             nn.Linear(256, 256),
             nn.ReLU(),
-            nn.Linear(256, 256),  # ReBRAC
-            nn.ReLU(),
             nn.Linear(256, action_dim),
             nn.Tanh(),
         )
 
         self.max_action = max_action
+        self.action_dim = action_dim
 
     def forward(self, state: torch.Tensor) -> torch.Tensor:
         return self.max_action * self.net(state)
@@ -116,13 +109,8 @@ class Critic(nn.Module):
 
         self.net = nn.Sequential(
             nn.Linear(state_dim + action_dim, 256),
-            nn.LayerNorm(normalized_shape=256),                     # ReBRAC
             nn.ReLU(),
-            nn.Linear(256, 256),              # ReBRAC
-            nn.LayerNorm(normalized_shape=256),                     # ReBRAC
-            nn.ReLU(),
-            nn.Linear(256, 256),              # ReBRAC
-            nn.LayerNorm(normalized_shape=256),                     # ReBRAC
+            nn.Linear(256, 256),
             nn.ReLU(),
             nn.Linear(256, 1),
         )
@@ -132,9 +120,10 @@ class Critic(nn.Module):
         return self.net(sa)
 
 
-class ReBRAC:
+class PRDC:
     def __init__(
         self,
+        data,               #PRDC
         max_action: float,
         actor: nn.Module,
         actor_optimizer: torch.optim.Optimizer,
@@ -147,10 +136,12 @@ class ReBRAC:
         policy_noise: float = 0.2,
         noise_clip: float = 0.5,
         policy_freq: int = 2,
-        beta1: float = 0.01,    # ReBRAC
-        beta2: float = 0.01,    # ReBRAC
+        alpha: float = 2.5,
+        beta: int = 2,          # PRDC
         device: str = "cpu",
     ):
+        self.data = data    #PRDC
+
         self.actor = actor
         self.actor_target = copy.deepcopy(actor)
         self.actor_optimizer = actor_optimizer
@@ -167,8 +158,10 @@ class ReBRAC:
         self.policy_noise = policy_noise
         self.noise_clip = noise_clip
         self.policy_freq = policy_freq
-        self.beta1 = beta1
-        self.beta2 = beta2
+        self.alpha = alpha
+        self.beta = beta
+        self.kd_tree = KDTree(data)
+
         self.total_it = 0
         self.device = device
 
@@ -176,29 +169,24 @@ class ReBRAC:
         log_dict = {}
         self.total_it += 1
 
-        assert len(batch) == 6
-        state, action, reward, next_state, next_action, done = batch        # ReBRAC: next_action
+        state, action, reward, next_state, done = batch
         not_done = 1 - done
 
         with torch.no_grad():
-            new_next_action = self.actor_target(next_state)
-
             # Select action according to actor and add clipped noise
             noise = (torch.randn_like(action) * self.policy_noise).clamp(
                 -self.noise_clip, self.noise_clip
             )
 
-            new_next_action_with_noise = (self.actor_target(next_state) + noise).clamp(
+            next_action = (self.actor_target(next_state) + noise).clamp(
                 -self.max_action, self.max_action
             )
 
             # Compute the target Q value
-            target_q1 = self.critic_1_target(next_state, new_next_action_with_noise)
-            target_q2 = self.critic_2_target(next_state, new_next_action_with_noise)
+            target_q1 = self.critic_1_target(next_state, next_action)
+            target_q2 = self.critic_2_target(next_state, next_action)
             target_q = torch.min(target_q1, target_q2)
-            target_q = reward + not_done * (
-                    self.gamma * target_q - self.beta2 * F.mse_loss(next_action, new_next_action)
-            ) # ReBRAC
+            target_q = reward + not_done * self.gamma * target_q
 
         # Get current Q estimates
         current_q1 = self.critic_1(state, action)
@@ -219,8 +207,22 @@ class ReBRAC:
             # Compute actor loss
             pi = self.actor(state)
             q = self.critic_1(state, pi)
+            lmbda = self.alpha / q.abs().mean().detach()
+            actor_loss = -lmbda * q.mean()
 
-            actor_loss = -q.mean() + self.beta1 * F.mse_loss(pi, action)
+            ## PRDC --> Get the nearest neighbor
+            key = torch.cat([self.beta * state, pi], dim=1).detach().cpu().numpy()
+            _, idx = self.kd_tree.query(key, k=1, workers=-1)
+
+            ## Calculate the regularization, self.data.shape: (1000000, 23)
+            nearest_neighbour = (
+                torch.tensor(self.data[idx][:, -self.actor.action_dim:])
+                .squeeze(dim=1)
+                .to(self.device)
+            )
+            # pi.shape: (256, 6), nearest_neighbour: (256, 6)
+            actor_loss = actor_loss + F.mse_loss(pi, nearest_neighbour)   # PRDC
+
             log_dict["actor_loss"] = actor_loss.item()
             # Optimize the actor
             self.actor_optimizer.zero_grad()
@@ -290,17 +292,22 @@ def train(config: TrainConfig):
         "policy_noise": config.policy_noise * max_action,
         "noise_clip": config.noise_clip * max_action,
         "policy_freq": config.policy_freq,
-        # ReBRAC
-        "beta1": config.beta1,
-        "beta2": config.beta2,
+        # TD3 + BC
+        "alpha": config.alpha,
     }
 
     print("---------------------------------------")
     print(f"Training TD3 + BC, Env: {config.env}, Seed: {config.seed}")
     print("---------------------------------------")
 
+    # (1000000, 17), (1000000, 6)
+    all_states, all_actions = replay_buffer.get_all_states_and_actions()
+
+    # (1000000, 23)
+    data = np.hstack([config.beta * all_states, all_actions])
+
     # Initialize actor
-    trainer = ReBRAC(**kwargs)
+    trainer = PRDC(data=data, **kwargs)     #PRDC: data=data
 
     train_and_eval_loop(trainer, config, replay_buffer, eval_env, actor)
 

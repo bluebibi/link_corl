@@ -50,7 +50,7 @@ class TrainConfig:
     cql_clip_diff_max: float = np.inf  # Q-function upper loss clipping
     orthogonal_init: bool = True  # Orthogonal initialization
     normalize: bool = True  # Normalize states
-    normalize_reward: bool = True  # Normalize reward
+    normalize_reward: bool = False  # Normalize reward
     q_n_hidden_layers: int = 3  # Number of hidden layers in Q networks
     bc_steps: int = int(0)  # Number of BC steps at start
     reward_scale: float = 5.0  # Reward scale for normalization
