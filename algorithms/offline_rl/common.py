@@ -316,6 +316,8 @@ def preliminary(config):
     next_observations = all_observations[:, 1:, :]
 
     env = wrap_env(env, state_mean=state_mean, state_std=state_std)
+    eval_env = wrap_env(eval_env, state_mean=state_mean, state_std=state_std)
+
     replay_buffer = ReplayBuffer(
         state_dim,
         action_dim,
