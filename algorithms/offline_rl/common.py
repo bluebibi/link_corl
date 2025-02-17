@@ -193,7 +193,7 @@ class ReplayBuffer:
         next_states = self._next_states[indices]
         next_actions = self._next_actions[indices]
         dones = torch.where((self._terminations[indices] + self._truncations[indices]) > 0.0, 1.0, 0.0)
-        print(self._terminations[indices].sum(), self._truncations[indices].sum(), dones.shape, dones.sum(), "@#############")
+        # print(self._terminations[indices].sum(), self._truncations[indices].sum(), dones.shape, dones.sum(), "@#############")
         return [states, actions, rewards, next_states, next_actions, dones]
 
     def get_all_states_and_actions(self):
