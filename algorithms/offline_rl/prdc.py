@@ -30,9 +30,9 @@ class TrainConfig:
     # wandb project name
     project: str = "CORL"
     # wandb group name
-    group: str = "TD3_BC-MINARI"
+    group: str = "PRDC_BC-MINARI"
     # wandb run name
-    name: str = "TD3_BC"
+    name: str = "PRDC"
     # training dataset and evaluation environment
     # coefficient for the Q-function in actor loss
     alpha: float = 2.5
