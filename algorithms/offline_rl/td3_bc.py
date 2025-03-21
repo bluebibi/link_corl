@@ -20,7 +20,11 @@ class TrainConfig:
     device: str = "cpu"
     env: str = "halfcheetah-medium-expert-v2"  # OpenAI gym environment name
     minari_dataset_name: str = "mujoco/halfcheetah/expert-v0"
-    seed: int = 0  # Sets Gym, PyTorch and Numpy seeds
+
+    seed: int = 0  # PyTorch and Numpy seeds
+    train_seed: int = 10   # training env - random seed
+    eval_seed: int = 10   # eval env - random seed
+
     # evaluation frequency, will evaluate every eval_freq training steps
     eval_freq: int = int(5e3)
     # number of episodes to run during evaluation
@@ -63,7 +67,7 @@ class TrainConfig:
     checkpoints_path: Optional[str] = None
     # file name for loading a model, optional
     load_model: str = ""
-    wandb: bool = False
+    wandb: bool = True
 
 
     def __post_init__(self):

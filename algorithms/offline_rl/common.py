@@ -12,6 +12,8 @@ import uuid
 from dataclasses import asdict
 from pathlib import Path
 
+from torch.utils.data import IterableDataset
+
 TensorBatch = List[torch.Tensor]
 
 def compute_mean_std(states: np.ndarray, eps: float) -> Tuple[np.ndarray, np.ndarray]:
@@ -176,6 +178,18 @@ class ReplayBuffer:
 
         self._next_actions[:n_transitions] = next_actions_flatten
 
+    def load_sequence_dataset(self,
+            observations: np.ndarray,
+            next_observations: np.ndarray,
+            actions: np.ndarray,
+            rewards: np.ndarray,
+            terminations: np.ndarray,
+            truncations: np.ndarray,
+            infos: np.ndarray):
+        self.load_dataset(observations, next_observations, actions, rewards, terminations, truncations, infos)
+
+        # time_steps = np.arange(start_idx, start_idx + self.seq_len)
+
     def sample(self, batch_size: int) -> TensorBatch:
         indices = np.random.randint(0, min(self._size, self._pointer), size=batch_size)
         states = self._states[indices]
@@ -204,12 +218,10 @@ class ReplayBuffer:
         # I left it unimplemented since now we do not do fine-tuning.
         raise NotImplementedError
 
+
 def set_seed(
-    seed: int, env: Optional[gym.Env] = None, deterministic_torch: bool = False
+    seed: int, deterministic_torch: bool = False
 ):
-    if env is not None:
-        env.observation_space.seed(seed)
-        env.action_space.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
     random.seed(seed)
@@ -230,21 +242,29 @@ def wandb_init(config: dict) -> None:
     )
     wandb.run.save()
 
+def discounted_cumulative_sum(x: np.ndarray, gamma: float) -> np.ndarray:
+    cumulative_sum = np.zeros_like(x)
+    cumulative_sum[-1] = x[-1]
+    for t in reversed(range(x.shape[0] - 1)):
+        cumulative_sum[t] = x[t] + gamma * cumulative_sum[t + 1]
+    return cumulative_sum
+
 def preliminary(config):
     dataset = minari.load_dataset(config.minari_dataset_name, download=True)
-
     n_episodes = dataset.total_episodes
 
     env = dataset.recover_environment()
-    env.observation_space.seed(config.seed)
-    env.action_space.seed(config.seed)
+    env.observation_space.seed(config.train_seed)
+    env.action_space.seed(config.train_seed)
 
     eval_env = dataset.recover_environment(eval_env=True)
+    eval_env.observation_space.seed(config.eval_seed)
+    eval_env.action_space.seed(config.eval_seed)
+
     assert env.spec == eval_env.spec
 
     # Set seeds
-    seed = config.seed
-    set_seed(seed, env)
+    set_seed(config.seed)
 
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
@@ -254,33 +274,40 @@ def preliminary(config):
     print("state_space: ", env.observation_space)
     print("action_space: ", env.action_space)
 
-    all_episode_list = dataset.sample_episodes(n_episodes=n_episodes)
+    all_episode_list = dataset.iterate_episodes()
 
-    # (1000, 1001, 17)
-    all_observations = np.asarray([episode.observations for episode in all_episode_list])
+    all_observations = []
+    all_actions = []
+    all_rewards = []
+    all_terminations = []
+    all_truncations = []
+    all_infos = []
+    all_return_to_gos = []
 
-    # (1000, 1000, 6)
-    all_actions = np.asarray([episode.actions for episode in all_episode_list])
+    for episode in all_episode_list:
+        all_observations.append(episode.observations)
+        all_actions.append(episode.actions)
+        all_rewards.append(episode.rewards)
+        all_terminations.append(episode.terminations)
+        all_truncations.append(episode.truncations)
+        all_infos.append(episode.infos)
+        all_return_to_gos.append(discounted_cumulative_sum(episode.rewards, gamma=1.0))
 
-    # (1000, 1000)
-    all_rewards = np.asarray([episode.rewards for episode in all_episode_list])
+    all_observations = np.asarray(all_observations)
+    all_actions = np.asarray(all_actions)
+    all_rewards = np.asarray(all_rewards)
+    all_terminations = np.asarray(all_terminations)
+    all_truncations = np.asarray(all_truncations)
+    all_infos = np.asarray(all_infos)
+    all_return_to_gos = np.asarray(all_return_to_gos)
 
-    # (1000, 1000)
-    all_terminations = np.asarray([episode.terminations for episode in all_episode_list])
-
-    # (1000, 1000)
-    all_truncations = np.asarray([episode.truncations for episode in all_episode_list])
-    # print(all_truncations.sum(axis=-1).sum(), "@@@@@")
-
-    # (1000,): [{} {} ... {} {}]
-    all_infos = np.asarray([episode.infos for episode in all_episode_list])
-
-    # print("all_observations.shape:", all_observations.shape)
-    # print("all_actions.shape:", all_actions.shape)
-    # print("all_rewards.shape:", all_rewards.shape)
-    # print("all_terminations.shape:", all_terminations.shape)
-    # print("all_truncations.shape:", all_truncations.shape)
-    # print("all_infos.shape:", all_infos.shape)
+    print("all_observations.shape:", all_observations.shape)
+    print("all_actions.shape:", all_actions.shape)
+    print("all_rewards.shape:", all_rewards.shape)
+    print("all_terminations.shape:", all_terminations.shape)
+    print("all_truncations.shape:", all_truncations.shape)
+    print("all_infos.shape:", all_infos.shape)
+    print("all_return_to_goes.shape:", all_return_to_gos.shape)
 
     # Print Episode Rewards
     episode_rewards = all_rewards.sum(axis=1)
