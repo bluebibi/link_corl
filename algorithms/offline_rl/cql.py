@@ -13,7 +13,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Normal, TanhTransform, TransformedDistribution
 
-from algorithms.offline_rl.common import TensorBatch, preliminary, soft_update, train_and_eval_loop
+from algorithms.offline_rl.a_data_buffer import TensorBatch
+from algorithms.offline_rl.b_common import preliminary, soft_update, train_and_eval_loop
 
 
 @dataclass
@@ -657,7 +658,7 @@ class ContinuousCQL:
 
 
 @pyrallis.wrap()
-def train(config: TrainConfig):
+def main(config: TrainConfig):
     env, eval_env, state_dim, action_dim, replay_buffer = preliminary(config)
 
     max_action = float(env.action_space.high[0])
@@ -730,4 +731,4 @@ def train(config: TrainConfig):
 
 
 if __name__ == "__main__":
-    train()
+    main()

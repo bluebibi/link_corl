@@ -1,7 +1,7 @@
 import minari
 import os
 import random
-from typing import List, Optional, Tuple, Union
+from typing import List, Tuple, Union
 import numpy as np
 import gymnasium as gym
 import torch
@@ -12,9 +12,7 @@ import uuid
 from dataclasses import asdict
 from pathlib import Path
 
-from torch.utils.data import IterableDataset
-
-TensorBatch = List[torch.Tensor]
+from algorithms.offline_rl.a_data_buffer import DataBuffer
 
 def compute_mean_std(states: np.ndarray, eps: float) -> Tuple[np.ndarray, np.ndarray]:
     mean = states.mean(0)
@@ -76,149 +74,6 @@ def wrap_env(
     return env
 
 
-class ReplayBuffer:
-    def __init__(
-        self,
-        state_dim: int,
-        action_dim: int,
-        buffer_size: int,
-        device: str = "cpu",
-    ):
-        self._buffer_size = buffer_size
-        self._pointer = 0
-        self._size = 0
-
-        self._states = torch.zeros(
-            (buffer_size, state_dim), dtype=torch.float32, device=device
-        )
-        self._actions = torch.zeros(
-            (buffer_size, action_dim), dtype=torch.float32, device=device
-        )
-        self._rewards = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
-        self._next_states = torch.zeros(
-            (buffer_size, state_dim), dtype=torch.float32, device=device
-        )
-        self._next_actions = torch.zeros(
-            (buffer_size, action_dim), dtype=torch.float32, device=device
-        )
-        self._terminations = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
-        self._truncations = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
-        self._device = device
-
-    def _to_tensor(self, data: np.ndarray) -> torch.Tensor:
-        return torch.tensor(data, dtype=torch.float32, device=self._device)
-
-    # Loads data in minari format, i.e. from Dict[str, np.array].
-    def load_dataset(
-            self,
-            observations: np.ndarray,
-            next_observations: np.ndarray,
-            actions: np.ndarray,
-            rewards: np.ndarray,
-            terminations: np.ndarray,
-            truncations: np.ndarray,
-            infos: np.ndarray
-    ):
-        if self._size != 0:
-            raise ValueError("Trying to load data into non-empty replay buffer")
-        n_transitions = observations.shape[0]
-        if n_transitions > self._buffer_size:
-            raise ValueError(
-                "Replay buffer is smaller than the dataset you are trying to load!"
-            )
-        self._states[:n_transitions] = self._to_tensor(observations)
-        self._actions[:n_transitions] = self._to_tensor(actions)
-        self._rewards[:n_transitions] = self._to_tensor(rewards[..., None])
-        self._next_states[:n_transitions] = self._to_tensor(next_observations)
-        self._terminations[:n_transitions] = self._to_tensor(terminations[..., None])
-        self._truncations[:n_transitions] = self._to_tensor(truncations[..., None])
-
-        self._size += n_transitions
-        self._pointer = min(self._size, n_transitions)
-
-        print(f"Dataset size: {n_transitions}")
-
-    def load_dataset_with_next_actions(
-            self,
-            n_episodes: int,
-            observations: np.ndarray,
-            next_observations: np.ndarray,
-            actions: np.ndarray,
-            rewards: np.ndarray,
-            terminations: np.ndarray,
-            truncations: np.ndarray,
-            infos: np.ndarray
-    ):
-        self.load_dataset(observations, next_observations, actions, rewards, terminations, truncations, infos)
-
-        n_transitions = observations.shape[0]
-        if n_transitions > self._buffer_size:
-            raise ValueError(
-                "Replay buffer is smaller than the dataset you are trying to load!"
-            )
-
-        # next_actions
-        assert n_transitions % n_episodes == 0
-        # actions_unflatten.shape: (1000, 1000, 6)
-        actions_unflatten = self._to_tensor(
-            actions.reshape(n_episodes, n_transitions // n_episodes, actions.shape[-1])
-        )
-
-        # Step 1: 첫 번째(0번째) 항목 삭제 -> Shape (1000, 999, 6)
-        next_actions = actions_unflatten[:, 1:, :]
-
-        # Step 2: 마지막 행에 None을 대체할 NaN으로 채운 텐서 생성 -> Shape (1000, 1, 6)
-        nan_padding = torch.full((n_episodes, 1, 6), 0.0)  # NaN으로 채우기
-
-        # Step 3: 두 텐서를 concat하여 최종 결과 만들기 -> Shape (1000, 1000, 6)
-        next_actions = torch.cat((next_actions, nan_padding), dim=1)
-
-        # next_actions_flatten.shape: (1000000, 6)
-        next_actions_flatten = next_actions.reshape(-1, actions.shape[-1])
-
-        self._next_actions[:n_transitions] = next_actions_flatten
-
-    def load_sequence_dataset(self,
-            observations: np.ndarray,
-            next_observations: np.ndarray,
-            actions: np.ndarray,
-            rewards: np.ndarray,
-            terminations: np.ndarray,
-            truncations: np.ndarray,
-            infos: np.ndarray):
-        self.load_dataset(observations, next_observations, actions, rewards, terminations, truncations, infos)
-
-        # time_steps = np.arange(start_idx, start_idx + self.seq_len)
-
-    def sample(self, batch_size: int) -> TensorBatch:
-        indices = np.random.randint(0, min(self._size, self._pointer), size=batch_size)
-        states = self._states[indices]
-        actions = self._actions[indices]
-        rewards = self._rewards[indices]
-        next_states = self._next_states[indices]
-        dones = torch.where((self._terminations[indices] + self._truncations[indices]) > 0.0, 1.0, 0.0)
-        return [states, actions, rewards, next_states, dones]
-
-    def sample_with_next_actions(self, batch_size: int) -> TensorBatch:
-        indices = np.random.randint(0, min(self._size, self._pointer), size=batch_size)
-        states = self._states[indices]
-        actions = self._actions[indices]
-        rewards = self._rewards[indices]
-        next_states = self._next_states[indices]
-        next_actions = self._next_actions[indices]
-        dones = torch.where((self._terminations[indices] + self._truncations[indices]) > 0.0, 1.0, 0.0)
-        # print(self._terminations[indices].sum(), self._truncations[indices].sum(), dones.shape, dones.sum(), "@#############")
-        return [states, actions, rewards, next_states, next_actions, dones]
-
-    def get_all_states_and_actions(self):
-        return self._states[:self._size], self._actions[:self._size]
-
-    def add_transition(self):
-        # Use this method to add new data into the replay buffer during fine-tuning.
-        # I left it unimplemented since now we do not do fine-tuning.
-        raise NotImplementedError
-
-
 def set_seed(
     seed: int, deterministic_torch: bool = False
 ):
@@ -241,6 +96,17 @@ def wandb_init(config: dict) -> None:
         id=str(uuid.uuid4()),
     )
     wandb.run.save()
+
+def pad_along_axis(
+    arr: np.ndarray, pad_to: int, axis: int = 0, fill_value: float = 0.0
+) -> np.ndarray:
+    pad_size = pad_to - arr.shape[axis]
+    if pad_size <= 0:
+        return arr
+
+    npad = [(0, 0)] * arr.ndim
+    npad[axis] = (0, pad_size)
+    return np.pad(arr, pad_width=npad, mode="constant", constant_values=fill_value)
 
 def discounted_cumulative_sum(x: np.ndarray, gamma: float) -> np.ndarray:
     cumulative_sum = np.zeros_like(x)
@@ -283,6 +149,7 @@ def preliminary(config):
     all_truncations = []
     all_infos = []
     all_return_to_gos = []
+    all_episode_length = []
 
     for episode in all_episode_list:
         all_observations.append(episode.observations)
@@ -292,6 +159,7 @@ def preliminary(config):
         all_truncations.append(episode.truncations)
         all_infos.append(episode.infos)
         all_return_to_gos.append(discounted_cumulative_sum(episode.rewards, gamma=1.0))
+        all_episode_length.append(len(episode.actions))
 
     all_observations = np.asarray(all_observations)
     all_actions = np.asarray(all_actions)
@@ -299,19 +167,23 @@ def preliminary(config):
     all_terminations = np.asarray(all_terminations)
     all_truncations = np.asarray(all_truncations)
     all_infos = np.asarray(all_infos)
-    all_return_to_gos = np.asarray(all_return_to_gos)
+    all_return_to_goes = np.asarray(all_return_to_gos)
+    all_episode_length = np.asarray(all_episode_length)
 
+    print("#" * 50)
     print("all_observations.shape:", all_observations.shape)
     print("all_actions.shape:", all_actions.shape)
     print("all_rewards.shape:", all_rewards.shape)
-    print("all_terminations.shape:", all_terminations.shape)
-    print("all_truncations.shape:", all_truncations.shape)
+    print("all_terminations.shape:", all_terminations.shape, np.sum(all_terminations, axis=1))
+    print("all_truncations.shape:", all_truncations.shape, np.sum(all_truncations, axis=1))
     print("all_infos.shape:", all_infos.shape)
-    print("all_return_to_goes.shape:", all_return_to_gos.shape)
+    print("all_return_to_goes.shape:", all_return_to_goes.shape)
+    print("all_episode_length.shape:", all_episode_length.shape)
+    print("#" * 50)
 
     # Print Episode Rewards
-    episode_rewards = all_rewards.sum(axis=1)
-    average_episode_rewards = episode_rewards.mean().item()
+    episode_rewards = np.sum(all_rewards, axis=1)
+    average_episode_rewards = np.mean(episode_rewards)
     print(f"Average Episode Reward over {n_episodes} episodes: {average_episode_rewards:.2f}")
 
     if config.normalize_reward:
@@ -345,34 +217,26 @@ def preliminary(config):
     env = wrap_env(env, state_mean=state_mean, state_std=state_std)
     eval_env = wrap_env(eval_env, state_mean=state_mean, state_std=state_std)
 
-    replay_buffer = ReplayBuffer(
+    data_buffer = DataBuffer(
         state_dim,
         action_dim,
         config.buffer_size,
         config.device,
     )
 
-    if config.name.startswith("ReBRAC"):
-        replay_buffer.load_dataset_with_next_actions(
-            n_episodes,
-            observations.reshape(-1, state_dim),
-            next_observations.reshape(-1, state_dim),
-            all_actions.reshape(-1, action_dim),
-            all_rewards.reshape(-1),
-            all_terminations.reshape(-1),
-            all_truncations.reshape(-1),
-            all_infos.reshape(-1)
-        )
-    else:
-        replay_buffer.load_dataset(
-            observations.reshape(-1, state_dim),
-            next_observations.reshape(-1, state_dim),
-            all_actions.reshape(-1, action_dim),
-            all_rewards.reshape(-1),
-            all_terminations.reshape(-1),
-            all_truncations.reshape(-1),
-            all_infos.reshape(-1)
-        )
+    data_buffer.fill_dataset(
+        n_episodes,
+        observations.reshape(-1, state_dim),
+        next_observations.reshape(-1, state_dim),
+        all_actions.reshape(-1, action_dim),
+        all_rewards.reshape(-1),
+        all_terminations.reshape(-1),
+        all_truncations.reshape(-1),
+        all_infos.reshape(-1),
+        all_return_to_goes.reshape(-1),
+        all_episode_length.reshape(-1),
+        with_next_actions = True if config.name.startswith("ReBRAC") else False
+    )
 
     # max_action = float(env.action_space.high[0])
 
@@ -382,7 +246,7 @@ def preliminary(config):
         with open(os.path.join(config.checkpoints_path, "config.yaml"), "w") as f:
             pyrallis.dump(config, f)
 
-    return env, eval_env, state_dim, action_dim, replay_buffer
+    return env, eval_env, state_dim, action_dim, data_buffer
 
 @torch.no_grad()
 def eval_actor(
@@ -415,7 +279,7 @@ def eval_actor(
 def get_gamma(t, config):
     return config.gamma_start + (config.gamma_end - config.gamma_start) * (t / config.max_timesteps)
 
-def train_and_eval_loop(trainer, config, replay_buffer, eval_env, actor):
+def train_and_eval_loop(trainer, config, data_buffer, eval_env, actor):
     if config.load_model != "":
         policy_file = Path(config.load_model)
         trainer.load_state_dict(torch.load(policy_file))
@@ -427,9 +291,9 @@ def train_and_eval_loop(trainer, config, replay_buffer, eval_env, actor):
     evaluations = []
     for t in range(int(config.max_timesteps)):
         if config.name.startswith("ReBRAC"):
-            batch = replay_buffer.sample_with_next_actions(config.batch_size)
+            batch = data_buffer.sample_with_next_actions(config.batch_size)
         else:
-            batch = replay_buffer.sample(config.batch_size)
+            batch = data_buffer.sample(config.batch_size)
 
         batch = [b.to(config.device) for b in batch]
 

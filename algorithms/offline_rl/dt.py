@@ -6,10 +6,12 @@ import torch
 import os
 import pyrallis
 from dataclasses import dataclass
+import numpy as np
 
 from torch.utils.data import IterableDataset
 
-from algorithms.offline_rl.common import preliminary, train_and_eval_loop, TensorBatch
+from algorithms.offline_rl.a_data_buffer import TensorBatch
+from algorithms.offline_rl.b_common import preliminary, train_and_eval_loop
 
 
 @dataclass
@@ -162,7 +164,7 @@ class DecisionTransformer(nn.Module):
         self,
         state_dim: int,
         action_dim: int,
-        seq_len: int = 10,
+        seq_len: int = 20,
         episode_len: int = 1000,
         embedding_dim: int = 128,
         num_layers: int = 4,
@@ -258,8 +260,49 @@ class DecisionTransformer(nn.Module):
         return out
 
 
+class SequenceDataset(IterableDataset):
+    def __init__(self, replay_buffer=None, config=None):
+        self.dataset, info = load_d4rl_trajectories(env_name, gamma=1.0)
+        self.reward_scale = config.reward_scale
+        self.replay_buffer = replay_buffer
+
+        self.seq_len = config.seq_len
+
+        self.state_mean = info["obs_mean"]
+        self.state_std = info["obs_std"]
+        # https://github.com/kzl/decision-transformer/blob/e2d82e68f330c00f763507b3b01d774740bee53f/gym/experiment.py#L116 # noqa
+        self.sample_prob = info["traj_lens"] / info["traj_lens"].sum()
+
+    def __prepare_sample(self, traj_idx, start_idx):
+        traj = self.dataset[traj_idx]
+        # https://github.com/kzl/decision-transformer/blob/e2d82e68f330c00f763507b3b01d774740bee53f/gym/experiment.py#L128 # noqa
+        states = traj["observations"][start_idx : start_idx + self.seq_len]
+        actions = traj["actions"][start_idx : start_idx + self.seq_len]
+        returns = traj["returns"][start_idx : start_idx + self.seq_len]
+        time_steps = np.arange(start_idx, start_idx + self.seq_len)
+
+        states = (states - self.state_mean) / self.state_std
+        returns = returns * self.reward_scale
+        # pad up to seq_len if needed, padding is masked during training
+        mask = np.hstack(
+            [np.ones(states.shape[0]), np.zeros(self.seq_len - states.shape[0])]
+        )
+        if states.shape[0] < self.seq_len:
+            states = pad_along_axis(states, pad_to=self.seq_len)
+            actions = pad_along_axis(actions, pad_to=self.seq_len)
+            returns = pad_along_axis(returns, pad_to=self.seq_len)
+
+        return states, actions, returns, time_steps, mask
+
+    def __iter__(self):
+        while True:
+            traj_idx = np.random.choice(len(self.dataset), p=self.sample_prob)
+            start_idx = random.randint(0, self.dataset[traj_idx]["rewards"].shape[0] - 1)
+            yield self.__prepare_sample(traj_idx, start_idx)
+
+
 @pyrallis.wrap()
-def train(config: TrainConfig):
+def main(config: TrainConfig):
     env, eval_env, state_dim, action_dim, replay_buffer = preliminary(config)
 
     max_action = float(env.action_space.high[0])
@@ -296,9 +339,12 @@ def train(config: TrainConfig):
     print(f"Training DT, Env: {config.env}, Seed: {config.seed}")
     print("---------------------------------------")
 
+    sequence_data = SequenceDataset(
+        config=config, replay_buffer=replay_buffer
+    )
     # trainer = DT(max_action=max_action, dt_model=dt_model, device=config.device)
 
     # train_and_eval_loop(trainer, config, replay_buffer, eval_env, actor)
 
 if __name__ == "__main__":
-    train()
+    main()

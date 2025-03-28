@@ -157,6 +157,26 @@ def load_d4rl_trajectories(
     env_name: str, gamma: float = 1.0
 ) -> Tuple[List[DefaultDict[str, np.ndarray]], Dict[str, Any]]:
     dataset = gym.make(env_name).get_dataset()
+    # obs = dataset["observations"]
+    # act = dataset["actions"]
+    # rwd = dataset["rewards"].reshape(-1, 1)
+    # next_obs = dataset["next_observations"]
+    # terminated = dataset["terminals"]
+    # timeout = dataset["timeouts"]
+    #
+    # print("data size:", obs.shape, act.shape, rwd.shape, next_obs.shape, terminated.shape, timeout.shape)
+    #
+    # print("num terminated:", sum(terminated))
+    # print("num timeout:", sum(timeout))
+    # print("num terminated and timeout:", sum(terminated & timeout))
+    # dataset
+    # size: (1000000, 11) (1000000, 3) (1000000, 1) (1000000, 11) (1000000, ) (1000000, )
+    # num
+    # terminated: 89
+    # num
+    # timeout: 938
+    # num
+    # terminated and timeout: 0
     traj, traj_len = [], []
 
     data_ = defaultdict(list)
@@ -562,4 +582,5 @@ def train(config: TrainConfig):
 
 
 if __name__ == "__main__":
-    train()
+    load_d4rl_trajectories(env_name="halfcheetah-medium-v2")
+    # train()
