@@ -12,8 +12,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from algorithms.offline_rl.a_data_buffer import TensorBatch
-from algorithms.offline_rl.b_common import preliminary, soft_update, train_and_eval_loop
+from algorithms.offline_rl.b_data_buffer import TensorBatch
+from algorithms.offline_rl.a_common import preliminary, soft_update, train_and_eval_loop
 
 # pip install scipy
 from scipy.spatial import KDTree # PRDC
@@ -271,7 +271,7 @@ class PRDC:
 
 @pyrallis.wrap()
 def main(config: TrainConfig):
-    env, eval_env, state_dim, action_dim, replay_buffer = preliminary(config)
+    env, eval_env, state_dim, action_dim, replay_buffer, _ = preliminary(config)
 
     max_action = float(env.action_space.high[0])
 

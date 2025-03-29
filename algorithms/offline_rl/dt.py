@@ -1,17 +1,17 @@
 import uuid
-from typing import Tuple, Optional, Dict
+from typing import Tuple, Optional
 import torch.nn as nn
 import torch
-
+import random
+import wandb
 import os
 import pyrallis
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 import numpy as np
+from torch.utils.data import DataLoader, IterableDataset
+from torch.nn import functional as F
 
-from torch.utils.data import IterableDataset
-
-from algorithms.offline_rl.a_data_buffer import TensorBatch
-from algorithms.offline_rl.b_common import preliminary, train_and_eval_loop
+from algorithms.offline_rl.a_common import preliminary, pad_along_axis, wandb_init
 
 
 @dataclass
@@ -25,10 +25,10 @@ class TrainConfig:
     train_seed: int = 10   # training env - random seed
     eval_seed: int = 10   # eval env - random seed
 
-    # evaluation frequency, will evaluate every eval_freq training steps
-    eval_freq: int = int(5e3)
+    # # evaluation frequency, will evaluate every eval_freq training steps
+    # eval_freq: int = int(5e3)
     # number of episodes to run during evaluation
-    n_episodes: int = 10
+    # n_episodes: int = 10
 
     # wandb project name
     project: str = "CORL"
@@ -65,7 +65,7 @@ class TrainConfig:
     # maximum gradient norm during training, optional
     clip_grad: Optional[float] = 0.25
     # training batch size
-    batch_size: int = 128
+    batch_size: int = 256
     # total training steps
     update_steps: int = 100_000
     # warmup steps for the learning rate scheduler
@@ -86,10 +86,10 @@ class TrainConfig:
     # target return-to-go for the prompting durint evaluation
     target_returns: Tuple[float, ...] = (12000.0, 6000.0)
 
-    # # number of episodes to run during evaluation
-    # eval_episodes: int = 100
-    # # evaluation frequency, will evaluate eval_every training steps
-    # eval_every: int = 10_000
+    # number of episodes to run during evaluation
+    eval_episodes: int = 10
+    # evaluation frequency, will evaluate eval_every training steps
+    eval_every: int = 200
 
     # path for checkpoints saving, optional
     checkpoints_path: Optional[str] = None
@@ -98,7 +98,7 @@ class TrainConfig:
     deterministic_torch: bool = False
 
     load_model: str = ""
-    wandb: bool = False
+    wandb: bool = True
 
     def __post_init__(self):
         self.name = f"{self.name}-{self.env}-{str(uuid.uuid4())[:8]}"
@@ -226,6 +226,7 @@ class DecisionTransformer(nn.Module):
         padding_mask: Optional[torch.Tensor] = None,  # [batch_size, seq_len]
     ) -> torch.FloatTensor:
         batch_size, seq_len = states.shape[0], states.shape[1]
+
         # [batch_size, seq_len, emb_dim]
         time_emb = self.timestep_emb(time_steps)
         state_emb = self.state_emb(states) + time_emb
@@ -261,49 +262,217 @@ class DecisionTransformer(nn.Module):
 
 
 class SequenceDataset(IterableDataset):
-    def __init__(self, replay_buffer=None, config=None):
-        self.dataset, info = load_d4rl_trajectories(env_name, gamma=1.0)
+    def __init__(self, n_episodes, episode_data_buffer=None, config=None):
+        self.n_episodes = n_episodes
         self.reward_scale = config.reward_scale
-        self.replay_buffer = replay_buffer
-
         self.seq_len = config.seq_len
+        self.config = config
 
-        self.state_mean = info["obs_mean"]
-        self.state_std = info["obs_std"]
+        self.states, self.actions, self.return_to_goes, self.episode_lengths = episode_data_buffer.get_all_data_for_dt()
+        print(self.states.shape)
+        print(self.actions.shape)
+        print(self.return_to_goes.shape)
+        print(self.episode_lengths.shape)
+
         # https://github.com/kzl/decision-transformer/blob/e2d82e68f330c00f763507b3b01d774740bee53f/gym/experiment.py#L116 # noqa
-        self.sample_prob = info["traj_lens"] / info["traj_lens"].sum()
+        self.sample_prob = self.episode_lengths / self.episode_lengths.sum()
+
 
     def __prepare_sample(self, traj_idx, start_idx):
-        traj = self.dataset[traj_idx]
-        # https://github.com/kzl/decision-transformer/blob/e2d82e68f330c00f763507b3b01d774740bee53f/gym/experiment.py#L128 # noqa
-        states = traj["observations"][start_idx : start_idx + self.seq_len]
-        actions = traj["actions"][start_idx : start_idx + self.seq_len]
-        returns = traj["returns"][start_idx : start_idx + self.seq_len]
-        time_steps = np.arange(start_idx, start_idx + self.seq_len)
+        states = self.states[traj_idx][start_idx : start_idx + self.seq_len]
+        actions = self.actions[traj_idx][start_idx : start_idx + self.seq_len]
+        return_to_goes = self.return_to_goes[traj_idx][start_idx : start_idx + self.seq_len]
 
-        states = (states - self.state_mean) / self.state_std
-        returns = returns * self.reward_scale
-        # pad up to seq_len if needed, padding is masked during training
-        mask = np.hstack(
-            [np.ones(states.shape[0]), np.zeros(self.seq_len - states.shape[0])]
+        time_steps = torch.tensor(
+            np.arange(start_idx, start_idx + self.seq_len), dtype=torch.int, device=self.config.device
         )
-        if states.shape[0] < self.seq_len:
-            states = pad_along_axis(states, pad_to=self.seq_len)
-            actions = pad_along_axis(actions, pad_to=self.seq_len)
-            returns = pad_along_axis(returns, pad_to=self.seq_len)
 
-        return states, actions, returns, time_steps, mask
+
+        # pad up to seq_len if needed, padding is masked during training
+        # [1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1.]
+        # [1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 0. 0. 0.]
+        mask = torch.tensor(
+            np.hstack(
+                [np.ones(states.shape[0]), np.zeros(self.seq_len - states.shape[0])]
+            ),
+            dtype=torch.float32, device=self.config.device
+        )
+
+        if states.shape[0] < self.seq_len:
+            states = pad_along_axis(states, pad_to=self.seq_len, device=self.config.device)
+            actions = pad_along_axis(actions, pad_to=self.seq_len, device=self.config.device)
+            return_to_goes = pad_along_axis(return_to_goes, pad_to=self.seq_len, device=self.config.device)
+
+        return states, actions, return_to_goes, time_steps, mask
 
     def __iter__(self):
         while True:
-            traj_idx = np.random.choice(len(self.dataset), p=self.sample_prob)
-            start_idx = random.randint(0, self.dataset[traj_idx]["rewards"].shape[0] - 1)
+            traj_idx = np.random.choice(self.n_episodes, p=self.sample_prob)
+            start_idx = random.randint(0, self.return_to_goes[traj_idx].shape[0] - 1)
             yield self.__prepare_sample(traj_idx, start_idx)
 
 
+class DT:
+    def __init__(self, train_data_loader, dt_model, optimizer, scheduler, eval_env, config):
+        self.train_data_loader = train_data_loader
+        self.dt_model = dt_model
+        self.optimizer = optimizer
+        self.scheduler = scheduler
+        self.eval_env = eval_env
+        self.config = config
+
+        if self.config.wandb:
+            wandb_init(asdict(self.config))
+
+    def train(self):
+        train_loader_iter = iter(self.train_data_loader)
+
+        for step in range(self.config.update_steps):
+            batch = next(train_loader_iter)
+            states, actions, returns, time_steps, mask = [b.to(self.config.device) for b in batch]
+
+            # True value indicates that the corresponding key value will be ignored
+            padding_mask = ~mask.to(torch.bool)
+
+            predicted_actions = self.dt_model(
+                states=states,
+                actions=actions,
+                returns_to_go=returns,
+                time_steps=time_steps,
+                padding_mask=padding_mask,
+            )
+
+            loss = F.mse_loss(predicted_actions, actions.detach(), reduction="none")
+            # [batch_size, seq_len, action_dim] * [batch_size, seq_len, 1]
+            loss = (loss * mask.unsqueeze(-1)).mean()
+
+            self.optimizer.zero_grad()
+            loss.backward()
+            if self.config.clip_grad is not None:
+                torch.nn.utils.clip_grad_norm_(self.dt_model.parameters(), self.config.clip_grad)
+            self.optimizer.step()
+            self.scheduler.step()
+
+            if step % 10 == 0:
+                print(
+                    f"[Step: {step:>5d}/{self.config.update_steps:,}] "
+                    f"Train Loss: {loss.item():.5f}, "
+                    f"Learning Rate: {self.scheduler.get_last_lr()[0]:.7f}"
+                )
+
+            if self.config.wandb:
+                wandb.log(
+                    {
+                        "train_loss": loss.item(),
+                        "learning_rate": self.scheduler.get_last_lr()[0],
+                    },
+                    step=step,
+                )
+
+            # validation in the env for the actual online performance
+            if step != 0 and (step % self.config.eval_every == 0 or step == self.config.update_steps - 1):
+                self.dt_model.eval()
+                for target_return in self.config.target_returns:
+                    episode_returns = []
+                    episode_timesteps = []
+                    for _ in range(self.config.eval_episodes):
+                        eval_return, eval_len = self.eval_rollout(
+                            model=self.dt_model,
+                            env=self.eval_env,
+                            target_return=target_return * self.config.reward_scale,
+                            device=self.config.device,
+                        )
+                        # unscale for logging & correct normalized score computation
+                        episode_returns.append(eval_return)
+                        episode_timesteps.append(eval_len)
+
+                    # normalized_scores = (
+                    #     self.eval_env.get_normalized_score(np.array(eval_returns)) * 100
+                    # )
+
+                    episode_returns_mean = np.asarray(episode_returns).mean()
+                    episode_timesteps_mean = np.asarray(episode_timesteps).mean()
+
+                    print("\n---------------------------------------")
+                    print(
+                        f"Evaluation episode reward over {self.config.eval_episodes} "
+                        f"episodes: {episode_returns_mean:.3f}"
+                    )
+                    print(
+                        f"Evaluation timestep over {self.config.eval_episodes} "
+                        f"episodes: {episode_timesteps_mean:.2f}"
+                    )
+                    print("---------------------------------------")
+
+                    if self.config.wandb:
+                        wandb.log(
+                            {
+                                f"eval/return_mean": episode_returns_mean,
+                                f"eval/return_std": episode_timesteps_mean,
+                                # f"eval/{target_return}_normalized_score_mean": np.mean(
+                                #     normalized_scores
+                                # ),
+                                # f"eval/{target_return}_normalized_score_std": np.std(
+                                #     normalized_scores
+                                # ),
+                            },
+                            step=step,
+                        )
+                self.dt_model.train()
+
+        if self.config.checkpoints_path:
+            torch.save(
+                self.dt_model.state_dict(),
+                os.path.join(self.config.checkpoints_path, "dt_checkpoint.pt")
+            )
+
+    # Training and evaluation logic
+    @torch.no_grad()
+    def eval_rollout(self, model, env, target_return, device) -> Tuple[float, float]:
+        states = torch.zeros(
+            1, model.episode_len + 1, model.state_dim, dtype=torch.float, device=device
+        )
+        actions = torch.zeros(
+            1, model.episode_len, model.action_dim, dtype=torch.float, device=device
+        )
+        returns = torch.zeros(1, model.episode_len + 1, dtype=torch.float, device=device)
+        time_steps = torch.arange(model.episode_len, dtype=torch.long, device=device)
+        time_steps = time_steps.view(1, -1)
+
+        state, _ = env.reset()
+        states[:, 0] = torch.as_tensor(state, device=device)
+        returns[:, 0] = torch.as_tensor(target_return, device=device)
+
+        # cannot step higher than model episode len, as timestep embeddings will crash
+        episode_return, episode_len = 0.0, 0.0
+        for step in range(model.episode_len):
+            # first select history up to step, then select last seq_len states,
+            # step + 1 as : operator is not inclusive, last action is dummy with zeros
+            # (as model will predict last, actual last values are not important)
+            predicted_actions = model(  # fix this noqa!!!
+                states[:, : step + 1][:, -model.seq_len:],
+                actions[:, : step + 1][:, -model.seq_len:],
+                returns[:, : step + 1][:, -model.seq_len:],
+                time_steps[:, : step + 1][:, -model.seq_len:],
+            )
+            predicted_action = predicted_actions[0, -1].cpu().numpy()
+            next_state, reward, terminated, truncated, info = env.step(predicted_action)
+            # at step t, we predict a_t, get s_{t + 1}, r_{t + 1}
+            actions[:, step] = torch.as_tensor(predicted_action)
+            states[:, step + 1] = torch.as_tensor(next_state)
+            returns[:, step + 1] = torch.as_tensor(returns[:, step] - reward)
+
+            episode_return += reward
+            episode_len += 1
+
+            if terminated or truncated:
+                break
+
+        return episode_return, episode_len
+
 @pyrallis.wrap()
 def main(config: TrainConfig):
-    env, eval_env, state_dim, action_dim, replay_buffer = preliminary(config)
+    env, eval_env, state_dim, action_dim, data_buffer, n_episodes = preliminary(config)
 
     max_action = float(env.action_space.high[0])
 
@@ -321,7 +490,7 @@ def main(config: TrainConfig):
         max_action=config.max_action,
     ).to(config.device)
 
-    optim = torch.optim.AdamW(
+    optimizer = torch.optim.AdamW(
         dt_model.parameters(),
         lr=config.learning_rate,
         weight_decay=config.weight_decay,
@@ -331,7 +500,7 @@ def main(config: TrainConfig):
 
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(
-        optim,
+        optimizer,
         lambda steps: min((steps + 1) / config.warmup_steps, 1),
     )
 
@@ -339,12 +508,23 @@ def main(config: TrainConfig):
     print(f"Training DT, Env: {config.env}, Seed: {config.seed}")
     print("---------------------------------------")
 
-    sequence_data = SequenceDataset(
-        config=config, replay_buffer=replay_buffer
+    sequence_dataset = SequenceDataset(
+        n_episodes=n_episodes, episode_data_buffer=data_buffer, config=config
     )
-    # trainer = DT(max_action=max_action, dt_model=dt_model, device=config.device)
 
-    # train_and_eval_loop(trainer, config, replay_buffer, eval_env, actor)
+    train_data_loader = DataLoader(
+        sequence_dataset,
+        batch_size=config.batch_size,
+        pin_memory=True,
+        num_workers=config.num_workers,
+    )
+
+    trainer = DT(
+        train_data_loader=train_data_loader, dt_model=dt_model, optimizer=optimizer, scheduler=scheduler, config=config,
+        eval_env=eval_env
+    )
+
+    trainer.train()
 
 if __name__ == "__main__":
     main()

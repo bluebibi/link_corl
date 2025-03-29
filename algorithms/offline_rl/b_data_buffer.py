@@ -5,6 +5,61 @@ import numpy as np
 
 TensorBatch = List[torch.Tensor]
 
+class EpisodeDataBuffer:
+    def __init__(
+        self,
+        n_episodes: int,
+        state_dim: int,
+        action_dim: int,
+        device: str = "cpu",
+    ):
+        self.n_episodes = n_episodes
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        self.device = device
+
+        self._states = None
+        self._actions = None
+        self._rewards = None
+        self._next_states = None
+        self._next_actions = None
+        self._terminations = None
+        self._truncations = None
+        self._infos = None
+
+        self._return_to_goes = None
+        self._episode_lengths = None
+
+    def _to_tensor(self, data: np.ndarray) -> torch.Tensor:
+        return torch.tensor(data, dtype=torch.float32, device=self.device)
+
+    def fill_dataset(
+            self,
+            observations: np.ndarray,
+            next_observations: np.ndarray,
+            actions: np.ndarray,
+            rewards: np.ndarray,
+            terminations: np.ndarray,
+            truncations: np.ndarray,
+            infos: np.ndarray,
+            return_to_goes: np.ndarray,
+            episode_lengths: np.ndarray
+    ):
+        self._states = self._to_tensor(observations)
+        self._actions = self._to_tensor(actions)
+        self._rewards = self._to_tensor(rewards)
+        self._next_states = self._to_tensor(next_observations)
+        self._terminations = self._to_tensor(terminations)
+        self._truncations = self._to_tensor(truncations)
+        self._infos = infos
+
+        self._return_to_goes = self._to_tensor(return_to_goes)
+        self._episode_lengths = episode_lengths
+
+    def get_all_data_for_dt(self):
+        return self._states, self._actions, self._return_to_goes, self._episode_lengths
+
+
 class DataBuffer:
     def __init__(
         self,
@@ -37,10 +92,10 @@ class DataBuffer:
         self._episode_lengths = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
 
         self._infos = None
-        self._device = device
+        self.device = device
 
     def _to_tensor(self, data: np.ndarray) -> torch.Tensor:
-        return torch.tensor(data, dtype=torch.float32, device=self._device)
+        return torch.tensor(data, dtype=torch.float32, device=self.device)
 
     # fill data in minari format, i.e. from Dict[str, np.array].
     def _fill_dataset(

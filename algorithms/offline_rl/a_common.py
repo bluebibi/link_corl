@@ -12,7 +12,8 @@ import uuid
 from dataclasses import asdict
 from pathlib import Path
 
-from algorithms.offline_rl.a_data_buffer import DataBuffer
+from algorithms.offline_rl.b_data_buffer import DataBuffer, EpisodeDataBuffer
+
 
 def compute_mean_std(states: np.ndarray, eps: float) -> Tuple[np.ndarray, np.ndarray]:
     mean = states.mean(0)
@@ -98,15 +99,18 @@ def wandb_init(config: dict) -> None:
     wandb.run.save()
 
 def pad_along_axis(
-    arr: np.ndarray, pad_to: int, axis: int = 0, fill_value: float = 0.0
-) -> np.ndarray:
+    arr: np.ndarray, pad_to: int, axis: int = 0, fill_value: float = 0.0, device = None
+):
     pad_size = pad_to - arr.shape[axis]
     if pad_size <= 0:
         return arr
 
     npad = [(0, 0)] * arr.ndim
     npad[axis] = (0, pad_size)
-    return np.pad(arr, pad_width=npad, mode="constant", constant_values=fill_value)
+
+    return torch.tensor(
+        np.pad(arr, pad_width=npad, mode="constant", constant_values=fill_value), dtype=torch.float32, device=device
+    )
 
 def discounted_cumulative_sum(x: np.ndarray, gamma: float) -> np.ndarray:
     cumulative_sum = np.zeros_like(x)
@@ -149,7 +153,7 @@ def preliminary(config):
     all_truncations = []
     all_infos = []
     all_return_to_gos = []
-    all_episode_length = []
+    all_episode_lengths = []
 
     for episode in all_episode_list:
         all_observations.append(episode.observations)
@@ -159,7 +163,7 @@ def preliminary(config):
         all_truncations.append(episode.truncations)
         all_infos.append(episode.infos)
         all_return_to_gos.append(discounted_cumulative_sum(episode.rewards, gamma=1.0))
-        all_episode_length.append(len(episode.actions))
+        all_episode_lengths.append(len(episode.actions))
 
     all_observations = np.asarray(all_observations)
     all_actions = np.asarray(all_actions)
@@ -168,17 +172,17 @@ def preliminary(config):
     all_truncations = np.asarray(all_truncations)
     all_infos = np.asarray(all_infos)
     all_return_to_goes = np.asarray(all_return_to_gos)
-    all_episode_length = np.asarray(all_episode_length)
+    all_episode_lengths = np.asarray(all_episode_lengths)
 
     print("#" * 50)
     print("all_observations.shape:", all_observations.shape)
     print("all_actions.shape:", all_actions.shape)
     print("all_rewards.shape:", all_rewards.shape)
-    print("all_terminations.shape:", all_terminations.shape, np.sum(all_terminations, axis=1))
-    print("all_truncations.shape:", all_truncations.shape, np.sum(all_truncations, axis=1))
+    print("all_terminations.shape:", all_terminations.shape)
+    print("all_truncations.shape:", all_truncations.shape)
     print("all_infos.shape:", all_infos.shape)
     print("all_return_to_goes.shape:", all_return_to_goes.shape)
-    print("all_episode_length.shape:", all_episode_length.shape)
+    print("all_episode_lengths.shape:", all_episode_lengths.shape)
     print("#" * 50)
 
     # Print Episode Rewards
@@ -217,26 +221,44 @@ def preliminary(config):
     env = wrap_env(env, state_mean=state_mean, state_std=state_std)
     eval_env = wrap_env(eval_env, state_mean=state_mean, state_std=state_std)
 
-    data_buffer = DataBuffer(
-        state_dim,
-        action_dim,
-        config.buffer_size,
-        config.device,
-    )
-
-    data_buffer.fill_dataset(
-        n_episodes,
-        observations.reshape(-1, state_dim),
-        next_observations.reshape(-1, state_dim),
-        all_actions.reshape(-1, action_dim),
-        all_rewards.reshape(-1),
-        all_terminations.reshape(-1),
-        all_truncations.reshape(-1),
-        all_infos.reshape(-1),
-        all_return_to_goes.reshape(-1),
-        all_episode_length.reshape(-1),
-        with_next_actions = True if config.name.startswith("ReBRAC") else False
-    )
+    if config.name.startswith("DT"):
+        data_buffer = EpisodeDataBuffer(
+            n_episodes,
+            state_dim,
+            action_dim,
+            config.device,
+        )
+        data_buffer.fill_dataset(
+            observations,
+            next_observations,
+            all_actions,
+            all_rewards,
+            all_terminations,
+            all_truncations,
+            all_infos,
+            all_return_to_goes,
+            all_episode_lengths
+        )
+    else:
+        data_buffer = DataBuffer(
+            state_dim,
+            action_dim,
+            config.buffer_size,
+            config.device,
+        )
+        data_buffer.fill_dataset(
+            n_episodes,
+            observations.reshape(-1, state_dim),
+            next_observations.reshape(-1, state_dim),
+            all_actions.reshape(-1, action_dim),
+            all_rewards.reshape(-1),
+            all_terminations.reshape(-1),
+            all_truncations.reshape(-1),
+            all_infos.reshape(-1),
+            all_return_to_goes.reshape(-1),
+            all_episode_lengths.reshape(-1),
+            with_next_actions = True if config.name.startswith("ReBRAC") else False
+        )
 
     # max_action = float(env.action_space.high[0])
 
@@ -246,7 +268,7 @@ def preliminary(config):
         with open(os.path.join(config.checkpoints_path, "config.yaml"), "w") as f:
             pyrallis.dump(config, f)
 
-    return env, eval_env, state_dim, action_dim, data_buffer
+    return env, eval_env, state_dim, action_dim, data_buffer, n_episodes
 
 @torch.no_grad()
 def eval_actor(
