@@ -394,7 +394,7 @@ class DT:
                     episode_returns_mean = np.asarray(episode_returns).mean()
                     episode_timesteps_mean = np.asarray(episode_timesteps).mean()
 
-                    print("\n---------------------------------------")
+                    print("---------------------------------------")
                     print(
                         f"Evaluation episode reward over {self.config.eval_episodes} "
                         f"episodes: {episode_returns_mean:.3f} with target return: {target_return}"
