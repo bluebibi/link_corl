@@ -99,7 +99,7 @@ class TrainConfig:
     deterministic_torch: bool = False
 
     load_model: str = ""
-    wandb: bool = True
+    wandb: bool = False
 
     def __post_init__(self):
         self.name = f"{self.name}-{self.env}-{str(uuid.uuid4())[:8]}"
@@ -314,12 +314,16 @@ class SequenceDataset(IterableDataset):
 
 
 class DT:
-    def __init__(self, train_data_loader, dt_model, optimizer, scheduler, eval_env, config):
+    def __init__(self, train_data_loader, dt_model, optimizer, scheduler, eval_env, min_return, max_return, config):
         self.train_data_loader = train_data_loader
         self.dt_model = dt_model
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.eval_env = eval_env
+
+        self.min_return = min_return
+        self.max_return = max_return
+
         self.config = config
 
         if self.config.wandb:
@@ -356,7 +360,7 @@ class DT:
 
             if step % 10 == 0:
                 print(
-                    f"[Step: {step:>5d}/{self.config.update_steps:,}] "
+                    f"[Step: {step:,>5d}/{self.config.update_steps:,}] "
                     f"Train Loss: {loss.item():.5f}, "
                     f"Learning Rate: {self.scheduler.get_last_lr()[0]:.7f}"
                 )
@@ -392,9 +396,9 @@ class DT:
                     # )
 
                     episode_returns_mean = np.asarray(episode_returns).mean()
-                    episode_timesteps_mean = np.asarray(episode_timesteps).mean()
+                    episode_timesteps_mean = np.asarray(episode_timesteps).std()
 
-                    print("---------------------------------------")
+                    print("-" * 80)
                     print(
                         f"Evaluation episode reward over {self.config.eval_episodes} "
                         f"episodes: {episode_returns_mean:.3f} with target return: {target_return}"
@@ -403,7 +407,7 @@ class DT:
                         f"Evaluation timestep over {self.config.eval_episodes} "
                         f"episodes: {episode_timesteps_mean:.2f} with target return: {target_return}"
                     )
-                    print("---------------------------------------")
+                    print("-" * 80)
 
                     if self.config.wandb:
                         wandb.log(
@@ -473,7 +477,7 @@ class DT:
 
 @pyrallis.wrap()
 def main(config: TrainConfig):
-    env, eval_env, state_dim, action_dim, data_buffer, n_episodes = preliminary(config)
+    env, eval_env, state_dim, action_dim, data_buffer, n_episodes, min_return, max_return = preliminary(config)
 
     max_action = float(env.action_space.high[0])
 
@@ -521,8 +525,8 @@ def main(config: TrainConfig):
     )
 
     trainer = DT(
-        train_data_loader=train_data_loader, dt_model=dt_model, optimizer=optimizer, scheduler=scheduler, config=config,
-        eval_env=eval_env
+        train_data_loader=train_data_loader, dt_model=dt_model, optimizer=optimizer, scheduler=scheduler,
+        eval_env=eval_env, min_return=min_return, max_return=max_return, config=config
     )
 
     trainer.train()

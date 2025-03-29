@@ -26,16 +26,20 @@ def normalize_states(states: np.ndarray, mean: np.ndarray, std: np.ndarray):
 
 def return_reward_range(all_rewards, all_terminations, max_episode_steps: int) -> Tuple[float, float]:
     returns, lengths = [], []
-    ep_ret, ep_len = 0.0, 0
+
+    episode_return, episode_length = 0.0, 0
     for r, d in zip(all_rewards, all_terminations):
-        ep_ret += float(r)
-        ep_len += 1
-        if d or ep_len == max_episode_steps:
-            returns.append(ep_ret)
-            lengths.append(ep_len)
-            ep_ret, ep_len = 0.0, 0
-    lengths.append(ep_len)  # but still keep track of number of steps
+        episode_return += float(r)
+        episode_length += 1
+        if d or episode_length == max_episode_steps:
+            returns.append(episode_return)
+            lengths.append(episode_length)
+            episode_return, episode_len = 0.0, 0
+
+    lengths.append(episode_length)  # but still keep track of number of steps
+
     assert sum(lengths) == len(all_rewards)
+
     return min(returns), max(returns)
 
 def modify_reward(
@@ -46,12 +50,17 @@ def modify_reward(
     reward_scale: float = 1.0,
     reward_bias: float = 0.0,
 ):
+    min_return = None
+    max_return = None
+
     if any(s in env_name for s in ("halfcheetah", "hopper", "walker2d")):
-        min_ret, max_ret = return_reward_range(all_rewards, all_terminations, max_episode_steps)
-        all_rewards /= max_ret - min_ret
+        min_return, max_return = return_reward_range(all_rewards, all_terminations, max_episode_steps)
+        all_rewards /= max_return - min_return
         all_rewards *= max_episode_steps
+
     all_rewards = all_rewards * reward_scale + reward_bias
-    return all_rewards
+
+    return all_rewards, min_return, max_return
 
 def wrap_env(
     env: gym.Env,
@@ -122,6 +131,8 @@ def discounted_cumulative_sum(x: np.ndarray, gamma: float) -> np.ndarray:
 def preliminary(config):
     dataset = minari.load_dataset(config.minari_dataset_name, download=True)
     n_episodes = dataset.total_episodes
+    min_return = None
+    max_return = None
 
     env = dataset.recover_environment()
     env.observation_space.seed(config.train_seed)
@@ -191,13 +202,15 @@ def preliminary(config):
     print(f"Average Episode Reward over {n_episodes} episodes: {average_episode_rewards:.2f}")
 
     if config.normalize_reward:
-        all_rewards = modify_reward(
+        all_rewards, min_return, max_return = modify_reward(
             all_rewards.reshape(-1),
             np.where((all_terminations + all_truncations) > 0.0, 1.0, 0.0).reshape(-1),
             config.env,
             reward_scale=config.reward_scale,
             reward_bias=config.reward_bias,
-        ).reshape(n_episodes, -1)
+        )
+
+        all_rewards = all_rewards.reshape(n_episodes, -1)
 
     if config.normalize:
         state_mean, state_std = compute_mean_std(all_observations.reshape(-1, state_dim), eps=1e-3)
@@ -268,7 +281,7 @@ def preliminary(config):
         with open(os.path.join(config.checkpoints_path, "config.yaml"), "w") as f:
             pyrallis.dump(config, f)
 
-    return env, eval_env, state_dim, action_dim, data_buffer, n_episodes
+    return env, eval_env, state_dim, action_dim, data_buffer, n_episodes, min_return, max_return
 
 @torch.no_grad()
 def eval_actor(

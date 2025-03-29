@@ -269,7 +269,7 @@ class ReBRAC:
 
 @pyrallis.wrap()
 def main(config: TrainConfig):
-    env, eval_env, state_dim, action_dim, replay_buffer, _ = preliminary(config)
+    env, eval_env, state_dim, action_dim, replay_buffer, n_episodes, min_return, max_return = preliminary(config)
 
     max_action = float(env.action_space.high[0])
 
