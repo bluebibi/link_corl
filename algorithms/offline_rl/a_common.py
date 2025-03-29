@@ -11,9 +11,14 @@ import torch.nn as nn
 import uuid
 from dataclasses import asdict
 from pathlib import Path
+from configparser import ConfigParser
 
 from algorithms.offline_rl.b_data_buffer import DataBuffer, EpisodeDataBuffer
 
+global_config = ConfigParser()
+global_config.read('config.ini')
+
+use_wandb = global_config.getboolean(section='global', option='use_wandb')
 
 def compute_mean_std(states: np.ndarray, eps: float) -> Tuple[np.ndarray, np.ndarray]:
     mean = states.mean(0)
@@ -320,7 +325,7 @@ def train_and_eval_loop(trainer, config, data_buffer, eval_env, actor):
         trainer.load_state_dict(torch.load(policy_file))
         actor = trainer.actor
 
-    if config.wandb:
+    if use_wandb:
         wandb_init(asdict(config))
 
     evaluations = []
@@ -339,7 +344,7 @@ def train_and_eval_loop(trainer, config, data_buffer, eval_env, actor):
         log_dict = trainer.train(batch)
         ###############################
 
-        if config.wandb:
+        if use_wandb:
             wandb.log(log_dict, step=trainer.total_it)
 
         # Evaluate episode
@@ -370,7 +375,7 @@ def train_and_eval_loop(trainer, config, data_buffer, eval_env, actor):
                     trainer.state_dict(),
                     os.path.join(config.checkpoints_path, f"checkpoint_{t}.pt"),
                 )
-            if config.wandb:
+            if use_wandb:
                 wandb.log(
                     {
                         "eval_episode_reward": eval_score,

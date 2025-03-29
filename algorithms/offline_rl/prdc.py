@@ -7,13 +7,12 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 import numpy as np
-import pyrallis
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from algorithms.offline_rl.b_data_buffer import TensorBatch
 from algorithms.offline_rl.a_common import preliminary, soft_update, train_and_eval_loop
+from algorithms.offline_rl.b_data_buffer import TensorBatch
 
 # pip install scipy
 from scipy.spatial import KDTree # PRDC
@@ -74,8 +73,6 @@ class TrainConfig:
 
     # PRDC - [beta * state, action]
     beta: int = 2
-    wandb: bool = False
-
 
     def __post_init__(self):
         self.name = f"{self.name}-{self.env}-{str(uuid.uuid4())[:8]}"
@@ -269,7 +266,6 @@ class PRDC:
         self.total_it = state_dict["total_it"]
 
 
-@pyrallis.wrap()
 def main(config: TrainConfig):
     env, eval_env, state_dim, action_dim, replay_buffer, n_episodes, min_return, max_return = preliminary(config)
 
@@ -320,4 +316,5 @@ def main(config: TrainConfig):
 
 
 if __name__ == "__main__":
-    main()
+    config = TrainConfig()
+    main(config)

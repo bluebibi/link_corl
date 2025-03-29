@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
-import pyrallis
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -62,7 +61,6 @@ class TrainConfig:
     project: str = "CORL"  # wandb project name
     group: str = "CQL-MINARI"  # wandb group name
     name: str = "CQL"  # wandb run name
-    wandb: bool = False
 
     def __post_init__(self):
         self.name = f"{self.name}-{self.env}-{str(uuid.uuid4())[:8]}"
@@ -657,7 +655,6 @@ class ContinuousCQL:
         self.total_it = state_dict["total_it"]
 
 
-@pyrallis.wrap()
 def main(config: TrainConfig):
     env, eval_env, state_dim, action_dim, replay_buffer, n_episodes, min_return, max_return = preliminary(config)
 
@@ -731,4 +728,5 @@ def main(config: TrainConfig):
 
 
 if __name__ == "__main__":
-    main()
+    config = TrainConfig()
+    main(config)

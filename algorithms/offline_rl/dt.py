@@ -5,13 +5,12 @@ import torch
 import random
 import wandb
 import os
-import pyrallis
 from dataclasses import dataclass, asdict
 import numpy as np
 from torch.utils.data import DataLoader, IterableDataset
 from torch.nn import functional as F
 
-from algorithms.offline_rl.a_common import preliminary, pad_along_axis, wandb_init
+from algorithms.offline_rl.a_common import preliminary, pad_along_axis, wandb_init, use_wandb
 
 
 @dataclass
@@ -99,7 +98,6 @@ class TrainConfig:
     deterministic_torch: bool = False
 
     load_model: str = ""
-    wandb: bool = False
 
     def __post_init__(self):
         self.name = f"{self.name}-{self.env}-{str(uuid.uuid4())[:8]}"
@@ -326,7 +324,7 @@ class DT:
 
         self.config = config
 
-        if self.config.wandb:
+        if use_wandb:
             wandb_init(asdict(self.config))
 
     def train(self):
@@ -365,7 +363,7 @@ class DT:
                     f"Learning Rate: {self.scheduler.get_last_lr()[0]:.7f}"
                 )
 
-            if self.config.wandb:
+            if use_wandb:
                 wandb.log(
                     {
                         "train_loss": loss.item(),
@@ -409,7 +407,7 @@ class DT:
                     )
                     print("-" * 80)
 
-                    if self.config.wandb:
+                    if use_wandb:
                         wandb.log(
                             {
                                 f"eval/return_mean_{target_return}": episode_returns_mean,
@@ -475,7 +473,7 @@ class DT:
 
         return episode_return, episode_len
 
-@pyrallis.wrap()
+
 def main(config: TrainConfig):
     env, eval_env, state_dim, action_dim, data_buffer, n_episodes, min_return, max_return = preliminary(config)
 
@@ -532,4 +530,5 @@ def main(config: TrainConfig):
     trainer.train()
 
 if __name__ == "__main__":
-    main()
+    config = TrainConfig()
+    main(config)

@@ -88,9 +88,6 @@ class DataBuffer:
         self._terminations = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
         self._truncations = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
 
-        self._return_to_goes = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
-        self._episode_lengths = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
-
         self._infos = None
         self.device = device
 
@@ -123,8 +120,6 @@ class DataBuffer:
         self._next_states[:n_transitions] = self._to_tensor(next_observations)
         self._terminations[:n_transitions] = self._to_tensor(terminations[..., None])
         self._truncations[:n_transitions] = self._to_tensor(truncations[..., None])
-        self._return_to_goes[:n_transitions] = self._to_tensor(return_to_goes[..., None])
-        self._episode_lengths[:n_transitions] = self._to_tensor(episode_lengths[..., None])
         self._infos = infos
         self._size += n_transitions
         self._pointer = min(self._size, n_transitions)
