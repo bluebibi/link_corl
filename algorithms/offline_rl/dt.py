@@ -83,7 +83,8 @@ class TrainConfig:
 
     # number of workers for the pytorch dataloader
     num_workers: int = 4
-    # target return-to-go for the prompting durint evaluation
+
+    # target return-to-go for the prompting during evaluation
     target_returns: Tuple[float, ...] = (12000.0, 6000.0)
 
     # number of episodes to run during evaluation
@@ -396,19 +397,19 @@ class DT:
                     print("\n---------------------------------------")
                     print(
                         f"Evaluation episode reward over {self.config.eval_episodes} "
-                        f"episodes: {episode_returns_mean:.3f}"
+                        f"episodes: {episode_returns_mean:.3f} with target return: {target_return}"
                     )
                     print(
                         f"Evaluation timestep over {self.config.eval_episodes} "
-                        f"episodes: {episode_timesteps_mean:.2f}"
+                        f"episodes: {episode_timesteps_mean:.2f} with target return: {target_return}"
                     )
                     print("---------------------------------------")
 
                     if self.config.wandb:
                         wandb.log(
                             {
-                                f"eval/return_mean": episode_returns_mean,
-                                f"eval/return_std": episode_timesteps_mean,
+                                f"eval/return_mean_{target_return}": episode_returns_mean,
+                                f"eval/return_std_{target_return}": episode_timesteps_mean,
                                 # f"eval/{target_return}_normalized_score_mean": np.mean(
                                 #     normalized_scores
                                 # ),
